@@ -1,0 +1,6 @@
+{
+  "name": "منصة الشيخ أبي سعيد ابن بيضاء العلمية | Ibn Baydoah Platform",
+  "description": "المنصة العلمية الرسمية لطالب العلم والباحث في العلوم الشرعية واللغوية أبي سعيد مسعود بن محمود ابن بيضاء. تضم مؤلفاته وشروحاته الصوتية ومنظوماته وخواطره.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
