@@ -39,9 +39,7 @@ export const MobileBottomNav: React.FC<MobileBottomNavProps> = ({
   return (
     <nav
       aria-label="Mobile Bottom Navigation"
-      className={`lg:hidden fixed left-0 right-0 z-40 bg-[#FDFBF7]/95 backdrop-blur-md border-t border-[#E8DCC9] shadow-[0_-2px_12px_rgba(0,0,0,0.06)] transition-all duration-300 pb-safe ${
-        hasAudioPlaying ? 'bottom-[62px]' : 'bottom-0'
-      }`}
+      className="lg:hidden fixed left-0 right-0 bottom-0 z-40 bg-[#FDFBF7]/95 backdrop-blur-md border-t border-[#E8DCC9] shadow-[0_-2px_12px_rgba(0,0,0,0.06)] pb-safe"
     >
       <div className="grid grid-cols-6 items-center h-14 max-w-lg mx-auto px-1">
         {items.map((item) => {

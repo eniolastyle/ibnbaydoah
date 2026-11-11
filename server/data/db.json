@@ -256,12 +256,12 @@
       "totalLessons": 12,
       "duration": "٤٥ دقيقة لكل درس",
       "description": "شرح تفصيلي للمتون العقدية الأساسية مع بيان ضوابط التكفير ومسائل الإيمان.",
-      "audioUrl": "https://ia800301.us.archive.org/15/items/Quran-Mishari-Rashid-al-Afasy/001.mp3",
+      "audioUrl": "https://cdn.mp3quran.net/audio/mishary-alafasy/r1/001.mp3",
       "lessons": [
-        { "id": "l-1-1", "title": "الدرس الأول: مقدمة في أهمية دراسة النواقض والتحذير من الشرك", "duration": "48:20", "audioUrl": "https://ia800301.us.archive.org/15/items/Quran-Mishari-Rashid-al-Afasy/001.mp3" },
-        { "id": "l-1-2", "title": "الدرس الثاني: الناقض الأول - الشرك في عبادة الله تعالى", "duration": "51:10", "audioUrl": "https://ia800301.us.archive.org/15/items/Quran-Mishari-Rashid-al-Afasy/001.mp3" },
-        { "id": "l-1-3", "title": "الدرس الثالث: الناقض الثاني - اتخاذ الوسائط والشفاعة الشركية", "duration": "46:45", "audioUrl": "https://ia800301.us.archive.org/15/items/Quran-Mishari-Rashid-al-Afasy/001.mp3" },
-        { "id": "l-1-4", "title": "الدرس الرابع: الناقض الثالث والرابع - حكم من لم يكفر المشركين وتفضيل هدي غير النبي", "duration": "53:15", "audioUrl": "https://ia800301.us.archive.org/15/items/Quran-Mishari-Rashid-al-Afasy/001.mp3" }
+        { "id": "l-1-1", "title": "الدرس الأول: مقدمة في أهمية دراسة النواقض والتحذير من الشرك", "duration": "48:20", "audioUrl": "https://cdn.mp3quran.net/audio/mishary-alafasy/r1/001.mp3" },
+        { "id": "l-1-2", "title": "الدرس الثاني: الناقض الأول - الشرك في عبادة الله تعالى", "duration": "51:10", "audioUrl": "https://cdn.mp3quran.net/audio/mishary-alafasy/r1/001.mp3" },
+        { "id": "l-1-3", "title": "الدرس الثالث: الناقض الثاني - اتخاذ الوسائط والشفاعة الشركية", "duration": "46:45", "audioUrl": "https://cdn.mp3quran.net/audio/mishary-alafasy/r1/001.mp3" },
+        { "id": "l-1-4", "title": "الدرس الرابع: الناقض الثالث والرابع - حكم من لم يكفر المشركين وتفضيل هدي غير النبي", "duration": "53:15", "audioUrl": "https://cdn.mp3quran.net/audio/mishary-alafasy/r1/001.mp3" }
       ]
     },
     {
@@ -275,11 +275,11 @@
       "totalLessons": 28,
       "duration": "٥٥ دقيقة لكل درس",
       "description": "تحرير أصول أسماء الله وصفاته وإثبات عقيدة الفرقة الناجية المنصورة دون تحريف أو تعطيل.",
-      "audioUrl": "https://ia800301.us.archive.org/15/items/Quran-Mishari-Rashid-al-Afasy/002.mp3",
+      "audioUrl": "https://cdn.mp3quran.net/audio/mishary-alafasy/r1/002.mp3",
       "lessons": [
-        { "id": "l-2-1", "title": "الدرس الأول: ترجمة ابن تيمية وظروف كتابة الواسطية", "duration": "55:30", "audioUrl": "https://ia800301.us.archive.org/15/items/Quran-Mishari-Rashid-al-Afasy/002.mp3" },
-        { "id": "l-2-2", "title": "الدرس الثاني: قواعد أهل السنة في باب الأسماء والصفات", "duration": "58:12", "audioUrl": "https://ia800301.us.archive.org/15/items/Quran-Mishari-Rashid-al-Afasy/002.mp3" },
-        { "id": "l-2-3", "title": "الدرس الثالث: آيات الصفات العلية وإثبات العلو والاستواء", "duration": "61:00", "audioUrl": "https://ia800301.us.archive.org/15/items/Quran-Mishari-Rashid-al-Afasy/002.mp3" }
+        { "id": "l-2-1", "title": "الدرس الأول: ترجمة ابن تيمية وظروف كتابة الواسطية", "duration": "55:30", "audioUrl": "https://cdn.mp3quran.net/audio/mishary-alafasy/r1/002.mp3" },
+        { "id": "l-2-2", "title": "الدرس الثاني: قواعد أهل السنة في باب الأسماء والصفات", "duration": "58:12", "audioUrl": "https://cdn.mp3quran.net/audio/mishary-alafasy/r1/002.mp3" },
+        { "id": "l-2-3", "title": "الدرس الثالث: آيات الصفات العلية وإثبات العلو والاستواء", "duration": "61:00", "audioUrl": "https://cdn.mp3quran.net/audio/mishary-alafasy/r1/002.mp3" }
       ]
     },
     {
@@ -293,10 +293,10 @@
       "totalLessons": 18,
       "duration": "٤٠ دقيقة لكل درس",
       "description": "شرح ميسر لأبواب الكلام والإعراب وعلامات الخفض والرفع والنصب والجزم مع نماذج إعرابية وافرة.",
-      "audioUrl": "https://ia800301.us.archive.org/15/items/Quran-Mishari-Rashid-al-Afasy/003.mp3",
+      "audioUrl": "https://cdn.mp3quran.net/audio/mishary-alafasy/r1/003.mp3",
       "lessons": [
-        { "id": "l-3-1", "title": "الدرس الأول: حد الكلام وأقسامه: الاسم والفعل والحرف", "duration": "38:40", "audioUrl": "https://ia800301.us.archive.org/15/items/Quran-Mishari-Rashid-al-Afasy/003.mp3" },
-        { "id": "l-3-2", "title": "الدرس الثاني: باب الإعراب وعلاماته الأصلية والفرعية", "duration": "44:10", "audioUrl": "https://ia800301.us.archive.org/15/items/Quran-Mishari-Rashid-al-Afasy/003.mp3" }
+        { "id": "l-3-1", "title": "الدرس الأول: حد الكلام وأقسامه: الاسم والفعل والحرف", "duration": "38:40", "audioUrl": "https://cdn.mp3quran.net/audio/mishary-alafasy/r1/003.mp3" },
+        { "id": "l-3-2", "title": "الدرس الثاني: باب الإعراب وعلاماته الأصلية والفرعية", "duration": "44:10", "audioUrl": "https://cdn.mp3quran.net/audio/mishary-alafasy/r1/003.mp3" }
       ]
     },
     {
@@ -310,9 +310,9 @@
       "totalLessons": 22,
       "duration": "٥٠ دقيقة لكل درس",
       "description": "مستوى أعمق يناقش علل النحاة والشواهد الشعرية والاختيارات الراجحة في المسائل الخلافية.",
-      "audioUrl": "https://ia800301.us.archive.org/15/items/Quran-Mishari-Rashid-al-Afasy/004.mp3",
+      "audioUrl": "https://cdn.mp3quran.net/audio/mishary-alafasy/r1/004.mp3",
       "lessons": [
-        { "id": "l-4-1", "title": "الدرس الأول: تحرير مذاهب الكوفيين والبصريين في تعريف الكلام", "duration": "52:10", "audioUrl": "https://ia800301.us.archive.org/15/items/Quran-Mishari-Rashid-al-Afasy/004.mp3" }
+        { "id": "l-4-1", "title": "الدرس الأول: تحرير مذاهب الكوفيين والبصريين في تعريف الكلام", "duration": "52:10", "audioUrl": "https://cdn.mp3quran.net/audio/mishary-alafasy/r1/004.mp3" }
       ]
     },
     {
@@ -326,9 +326,9 @@
       "totalLessons": 65,
       "duration": "٦٠ دقيقة لكل درس",
       "description": "شرح مركز لألف بيت في صناعة النحو والصرف، مع فك عبارات الأبيات وتبيين ضوابط القواعد.",
-      "audioUrl": "https://ia800301.us.archive.org/15/items/Quran-Mishari-Rashid-al-Afasy/005.mp3",
+      "audioUrl": "https://cdn.mp3quran.net/audio/mishary-alafasy/r1/005.mp3",
       "lessons": [
-        { "id": "l-5-1", "title": "المقدمة وبيان أهمية حفظ الألفية وباب الكلام وما يتألف منه", "duration": "59:20", "audioUrl": "https://ia800301.us.archive.org/15/items/Quran-Mishari-Rashid-al-Afasy/005.mp3" }
+        { "id": "l-5-1", "title": "المقدمة وبيان أهمية حفظ الألفية وباب الكلام وما يتألف منه", "duration": "59:20", "audioUrl": "https://cdn.mp3quran.net/audio/mishary-alafasy/r1/005.mp3" }
       ]
     },
     {
@@ -342,9 +342,9 @@
       "totalLessons": 10,
       "duration": "٤٥ دقيقة لكل درس",
       "description": "شرح نصيحة الإخوان ومرشدة الخلان في مكارم الأخلاق والزهد في الدنيا وحث طالب العلم على التحصيل.",
-      "audioUrl": "https://ia800301.us.archive.org/15/items/Quran-Mishari-Rashid-al-Afasy/006.mp3",
+      "audioUrl": "https://cdn.mp3quran.net/audio/mishary-alafasy/r1/006.mp3",
       "lessons": [
-        { "id": "l-6-1", "title": "الدرس الأول: اعتزل ذكر الأغاني والغزل - معاني الزهد والورع", "duration": "43:10", "audioUrl": "https://ia800301.us.archive.org/15/items/Quran-Mishari-Rashid-al-Afasy/006.mp3" }
+        { "id": "l-6-1", "title": "الدرس الأول: اعتزل ذكر الأغاني والغزل - معاني الزهد والورع", "duration": "43:10", "audioUrl": "https://cdn.mp3quran.net/audio/mishary-alafasy/r1/006.mp3" }
       ]
     },
     {
@@ -358,9 +358,9 @@
       "totalLessons": 42,
       "duration": "٦٠ دقيقة لكل درس",
       "description": "مجلس أسبوعي بمركز الإمام سيبويه بإلورن في تفصيل أبواب التوحيد الذي هو حق الله على العبيد.",
-      "audioUrl": "https://ia800301.us.archive.org/15/items/Quran-Mishari-Rashid-al-Afasy/007.mp3",
+      "audioUrl": "https://cdn.mp3quran.net/audio/mishary-alafasy/r1/007.mp3",
       "lessons": [
-        { "id": "l-7-1", "title": "الدرس الأخير: باب ما جاء في الرقى والتمائم وحكم الشرك الأصغر", "duration": "57:30", "audioUrl": "https://ia800301.us.archive.org/15/items/Quran-Mishari-Rashid-al-Afasy/007.mp3" }
+        { "id": "l-7-1", "title": "الدرس الأخير: باب ما جاء في الرقى والتمائم وحكم الشرك الأصغر", "duration": "57:30", "audioUrl": "https://cdn.mp3quran.net/audio/mishary-alafasy/r1/007.mp3" }
       ]
     },
     {
@@ -374,9 +374,9 @@
       "totalLessons": 16,
       "duration": "٥٠ دقيقة لكل درس",
       "description": "قراءة في روائع الإمام الشافعي رحمه الله في الحكمة والصبر وطلب العلم والأخوة وعزة النفس.",
-      "audioUrl": "https://ia800301.us.archive.org/15/items/Quran-Mishari-Rashid-al-Afasy/008.mp3",
+      "audioUrl": "https://cdn.mp3quran.net/audio/mishary-alafasy/r1/008.mp3",
       "lessons": [
-        { "id": "l-8-1", "title": "المجلس العاشر: فضل العلم والتفقه وأبيات 'شكوت إلى وكيع سوء حفظي'", "duration": "49:05", "audioUrl": "https://ia800301.us.archive.org/15/items/Quran-Mishari-Rashid-al-Afasy/008.mp3" }
+        { "id": "l-8-1", "title": "المجلس العاشر: فضل العلم والتفقه وأبيات 'شكوت إلى وكيع سوء حفظي'", "duration": "49:05", "audioUrl": "https://cdn.mp3quran.net/audio/mishary-alafasy/r1/008.mp3" }
       ]
     },
     {
@@ -390,9 +390,9 @@
       "totalLessons": 54,
       "duration": "٦٥ دقيقة لكل درس",
       "description": "شرح أحاديث الأحكام المروية في الصحيحين، واستنباط القواعد الفقهية والأصولية منها بدقة واستيعاب.",
-      "audioUrl": "https://ia800301.us.archive.org/15/items/Quran-Mishari-Rashid-al-Afasy/009.mp3",
+      "audioUrl": "https://cdn.mp3quran.net/audio/mishary-alafasy/r1/009.mp3",
       "lessons": [
-        { "id": "l-9-1", "title": "كتاب الصلاة: مواقيت الصلاة وشروط صحتها وتفصيل أحاديث الباب", "duration": "64:40", "audioUrl": "https://ia800301.us.archive.org/15/items/Quran-Mishari-Rashid-al-Afasy/009.mp3" }
+        { "id": "l-9-1", "title": "كتاب الصلاة: مواقيت الصلاة وشروط صحتها وتفصيل أحاديث الباب", "duration": "64:40", "audioUrl": "https://cdn.mp3quran.net/audio/mishary-alafasy/r1/009.mp3" }
       ]
     }
   ],

@@ -486,6 +486,15 @@ app.get('/api/stats', (req, res) => {
   });
 });
 
+// Health check endpoint for Coolify and container orchestrators
+app.get('/api/health', (_req, res) => {
+  res.json({
+    status: 'ok',
+    uptime: process.uptime(),
+    timestamp: new Date().toISOString()
+  });
+});
+
 // Start server with Vite middleware in dev or static dist in production
 async function startServer() {
   const isProduction = process.env.NODE_ENV === 'production';
