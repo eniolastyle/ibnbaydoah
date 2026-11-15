@@ -17,14 +17,15 @@ let pgAvailable = false;
 
 export function hasPostgresConfig(): boolean {
   return Boolean(
-    process.env.DATABASE_URL ||
-      process.env.PGHOST ||
-      process.env.SQL_HOST
+    process.env.DATABASE_URL?.trim() ||
+      process.env.PGHOST?.trim() ||
+      process.env.POSTGRES_HOST?.trim() ||
+      process.env.SQL_HOST?.trim()
   );
 }
 
 function buildPoolConfig() {
-  const connectionString = process.env.DATABASE_URL;
+  const connectionString = process.env.DATABASE_URL?.trim();
   const requireSsl =
     process.env.PGSSLMODE === 'require' ||
     Boolean(connectionString && connectionString.includes('sslmode=require'));
@@ -40,11 +41,11 @@ function buildPoolConfig() {
   }
 
   return {
-    host: process.env.PGHOST || process.env.SQL_HOST || '127.0.0.1',
-    port: Number(process.env.PGPORT || process.env.SQL_PORT || 5432),
-    user: process.env.PGUSER || process.env.SQL_USER || 'ibn_baydoah',
-    password: process.env.PGPASSWORD || process.env.SQL_PASSWORD || '',
-    database: process.env.PGDATABASE || process.env.SQL_DATABASE || 'ibn_baydoah',
+    host: process.env.PGHOST?.trim() || process.env.POSTGRES_HOST?.trim() || process.env.SQL_HOST?.trim() || '127.0.0.1',
+    port: Number(process.env.PGPORT || process.env.POSTGRES_PORT || process.env.SQL_PORT || 5432),
+    user: process.env.PGUSER?.trim() || process.env.POSTGRES_USER?.trim() || process.env.SQL_USER?.trim() || 'ibn_baydoah',
+    password: process.env.PGPASSWORD ?? process.env.POSTGRES_PASSWORD ?? process.env.SQL_PASSWORD ?? '',
+    database: process.env.PGDATABASE?.trim() || process.env.POSTGRES_DB?.trim() || process.env.SQL_DATABASE?.trim() || 'ibn_baydoah',
     connectionTimeoutMillis: 4500,
     idleTimeoutMillis: 30000,
     max: 10,

@@ -32,7 +32,12 @@ services:
     environment:
       NODE_ENV: production
       PORT: "3000"
-      DATABASE_URL: ${DATABASE_URL:-postgres://${POSTGRES_USER:-ibn_baydoah}:${POSTGRES_PASSWORD:-change_me_in_coolify}@postgres:5432/${POSTGRES_DB:-ibn_baydoah}}
+      DATABASE_URL: ${DATABASE_URL:-}
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      POSTGRES_USER: ${POSTGRES_USER:-ibn_baydoah}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change_me_in_coolify}
+      POSTGRES_DB: ${POSTGRES_DB:-ibn_baydoah}
       ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
       R2_ENDPOINT: ${R2_ENDPOINT:-}
@@ -48,7 +53,7 @@ services:
     healthcheck:
       test:
         - CMD-SHELL
-        - wget --no-verbose --tries=1 --spider http://127.0.0.1:3000/api/health || exit 1
+        - node -e "fetch('http://127.0.0.1:3000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
       interval: 20s
       timeout: 5s
       retries: 3
