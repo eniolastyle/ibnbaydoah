@@ -52,7 +52,7 @@ export const Hero: React.FC<HeroProps> = ({ profile, onNavigate, stats }) => {
   const displayedBio =
     lang === 'ar'
       ? profile.bio
-      : "A dedicated scholar and researcher specializing in classical creed (Aqeedah), prophetic traditions (Hadith), Islamic jurisprudence (Fiqh), Arabic grammar (Nahw), and linguistic sciences. Graduated from Bayero University Kano with First Class Honours. Author of over 35 treatises and research studies, over 500 daily reflections (Khawātir Ibn Baydoah), major didactic poems on Islamic pedagogy, and dozens of recorded audio courses. He conducts regular teaching circles at Markaz Al-Imām Sībawayh in Ilorin, Nigeria, alongside his global virtual academy.";
+      : (profile.bioEnglish?.trim() || "A dedicated scholar and researcher specializing in classical creed (Aqeedah), prophetic traditions (Hadith), Islamic jurisprudence (Fiqh), Arabic grammar (Nahw), and linguistic sciences. Graduated from Bayero University Kano with First Class Honours. Author of over 35 treatises and research studies, over 500 daily reflections (Khawātir Ibn Baydoah), major didactic poems on Islamic pedagogy, and dozens of recorded audio courses. He conducts regular teaching circles at Markaz Al-Imām Sībawayh in Ilorin, Nigeria, alongside his global virtual academy.");
 
   const displayedLocation =
     lang === 'ar'

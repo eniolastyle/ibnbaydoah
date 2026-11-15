@@ -1,6 +1,7 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Article } from '../types';
 import { useLanguage } from '../context/LanguageContext';
+import { Pagination } from './Pagination';
 import {
   FileText,
   Search,
@@ -21,6 +22,12 @@ export const ArticlesSection: React.FC<ArticlesSectionProps> = ({ articles }) =>
   const [searchQuery, setSearchQuery] = useState('');
   const [readingArticle, setReadingArticle] = useState<Article | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [currentPage, setCurrentPage] = useState(1);
+  const PAGE_SIZE = 4;
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [selectedType, searchQuery, articles.length]);
 
   const filteredArticles = articles.filter(art => {
     const matchesType = selectedType === 'all' || art.type === selectedType;
@@ -33,6 +40,13 @@ export const ArticlesSection: React.FC<ArticlesSectionProps> = ({ articles }) =>
 
     return matchesType && matchesSearch;
   });
+
+  const totalPages = Math.max(1, Math.ceil(filteredArticles.length / PAGE_SIZE));
+  const safePage = Math.min(currentPage, totalPages);
+  const paginatedArticles = filteredArticles.slice(
+    (safePage - 1) * PAGE_SIZE,
+    safePage * PAGE_SIZE
+  );
 
   const handleCopyContent = (art: Article) => {
     const text = `${art.title}\n\n${art.content}\n\n[${t('written_by_attribution')} - ${art.date}]`;
@@ -190,12 +204,22 @@ export const ArticlesSection: React.FC<ArticlesSectionProps> = ({ articles }) =>
               >
                 {translateArticleType('مقال عقدي')}
               </button>
+              <button
+                onClick={() => setSelectedType('مقال لغوي')}
+                className={`px-3.5 py-2 rounded-xl transition ${
+                  selectedType === 'مقال لغوي'
+                    ? 'bg-[#0F382C] text-white font-bold shadow-xs'
+                    : 'bg-[#F4EFE6] text-[#0F382C] hover:bg-[#C5A880]/20 font-medium'
+                }`}
+              >
+                {lang === 'ar' ? 'مقال لغوي' : 'Linguistic Article'}
+              </button>
             </div>
           </div>
 
           {/* Articles Grid */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-8 sm:gap-10">
-            {filteredArticles.map(art => {
+            {paginatedArticles.map(art => {
               const isKhatira = art.type === 'خواطر ابن بيضاء';
 
               return (
@@ -273,6 +297,16 @@ export const ArticlesSection: React.FC<ArticlesSectionProps> = ({ articles }) =>
               );
             })}
           </div>
+
+          <Pagination
+            currentPage={safePage}
+            totalItems={filteredArticles.length}
+            pageSize={PAGE_SIZE}
+            onPageChange={(page) => {
+              setCurrentPage(page);
+              window.scrollTo({ top: 0, behavior: 'smooth' });
+            }}
+          />
         </>
       )}
     </div>

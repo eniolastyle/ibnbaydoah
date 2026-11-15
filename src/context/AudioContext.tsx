@@ -5,6 +5,7 @@ export interface ActiveTrack {
   id: string;
   title: string;
   series: string;
+  courseId?: string;
   category?: string;
   level?: string;
   levelId?: AudienceLevelId;
@@ -14,6 +15,10 @@ export interface ActiveTrack {
 
 interface AudioContextType {
   currentTrack: ActiveTrack | null;
+  queue: ActiveTrack[];
+  queueIndex: number;
+  hasNext: boolean;
+  hasPrev: boolean;
   isPlaying: boolean;
   currentTime: number;
   duration: number;
@@ -23,6 +28,9 @@ interface AudioContextType {
   isLoading: boolean;
   audioError: string | null;
   playTrack: (track: ActiveTrack) => void;
+  playQueue: (tracks: ActiveTrack[], startIndex?: number) => void;
+  playNext: () => void;
+  playPrev: () => void;
   togglePlay: () => void;
   pause: () => void;
   resume: () => void;
@@ -40,6 +48,8 @@ const AudioContext = createContext<AudioContextType | undefined>(undefined);
 
 export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [currentTrack, setCurrentTrack] = useState<ActiveTrack | null>(null);
+  const [queue, setQueue] = useState<ActiveTrack[]>([]);
+  const [queueIndex, setQueueIndex] = useState<number>(0);
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
   const [currentTime, setCurrentTime] = useState<number>(0);
   const [duration, setDuration] = useState<number>(0);
@@ -50,6 +60,32 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const [audioError, setAudioError] = useState<string | null>(null);
 
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  // Refs so native audio event listeners always read latest queue/playback state
+  const queueRef = useRef<ActiveTrack[]>([]);
+  const queueIndexRef = useRef<number>(0);
+  const playbackRateRef = useRef<number>(1);
+  const volumeRef = useRef<number>(0.9);
+  const isMutedRef = useRef<boolean>(false);
+
+  useEffect(() => {
+    queueRef.current = queue;
+  }, [queue]);
+
+  useEffect(() => {
+    queueIndexRef.current = queueIndex;
+  }, [queueIndex]);
+
+  useEffect(() => {
+    playbackRateRef.current = playbackRate;
+  }, [playbackRate]);
+
+  useEffect(() => {
+    volumeRef.current = volume;
+  }, [volume]);
+
+  useEffect(() => {
+    isMutedRef.current = isMuted;
+  }, [isMuted]);
 
   const clearError = useCallback(() => {
     setAudioError(null);
@@ -63,6 +99,65 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     audio.currentTime = newTime;
     setCurrentTime(newTime);
   }, [duration]);
+
+  const loadAndStartTrack = useCallback((track: ActiveTrack) => {
+    if (!audioRef.current) return;
+    const audio = audioRef.current;
+
+    setAudioError(null);
+    setCurrentTrack(track);
+    setIsLoading(true);
+    setCurrentTime(0);
+
+    audio.src = track.audioUrl;
+    audio.playbackRate = playbackRateRef.current;
+    audio.volume = isMutedRef.current ? 0 : volumeRef.current;
+
+    if (typeof window !== 'undefined' && 'mediaSession' in navigator) {
+      try {
+        navigator.mediaSession.metadata = new MediaMetadata({
+          title: track.title,
+          artist: "أبو سعيد مسعود ابن بيضاء",
+          album: track.series || "الشروح الصوتية",
+        });
+      } catch (e) {
+        console.debug('MediaSession setup:', e);
+      }
+    }
+
+    audio.play().then(() => {
+      setIsPlaying(true);
+      setIsLoading(false);
+      setAudioError(null);
+    }).catch(err => {
+      console.warn('Audio playback start warning:', err);
+      setIsLoading(false);
+      setIsPlaying(false);
+      setAudioError('يرجى النقر على زر التشغيل لبدء الاستماع');
+    });
+  }, []);
+
+  const playNext = useCallback(() => {
+    const q = queueRef.current;
+    const idx = queueIndexRef.current;
+    if (idx + 1 < q.length) {
+      const nextIdx = idx + 1;
+      setQueueIndex(nextIdx);
+      queueIndexRef.current = nextIdx;
+      loadAndStartTrack(q[nextIdx]);
+    }
+  }, [loadAndStartTrack]);
+
+  const playPrev = useCallback(() => {
+    const q = queueRef.current;
+    const idx = queueIndexRef.current;
+    if (idx - 1 >= 0 && q[idx - 1]) {
+      const prevIdx = idx - 1;
+      setQueueIndex(prevIdx);
+      queueIndexRef.current = prevIdx;
+      loadAndStartTrack(q[prevIdx]);
+    }
+  }, [loadAndStartTrack]);
 
   useEffect(() => {
     const audio = new Audio();
@@ -100,8 +195,17 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     };
 
     const onEnded = () => {
-      setIsPlaying(false);
-      setCurrentTime(0);
+      const q = queueRef.current;
+      const idx = queueIndexRef.current;
+      if (idx + 1 < q.length) {
+        const nextIdx = idx + 1;
+        setQueueIndex(nextIdx);
+        queueIndexRef.current = nextIdx;
+        loadAndStartTrack(q[nextIdx]);
+      } else {
+        setIsPlaying(false);
+        setCurrentTime(0);
+      }
     };
 
     const onError = () => {
@@ -125,6 +229,24 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     audio.addEventListener('ended', onEnded);
     audio.addEventListener('error', onError);
 
+    if (typeof window !== 'undefined' && 'mediaSession' in navigator) {
+      try {
+        navigator.mediaSession.setActionHandler('play', () => {
+          audio.play().then(() => setIsPlaying(true)).catch(() => {});
+        });
+        navigator.mediaSession.setActionHandler('pause', () => {
+          audio.pause();
+          setIsPlaying(false);
+        });
+        navigator.mediaSession.setActionHandler('seekbackward', () => skip(-15));
+        navigator.mediaSession.setActionHandler('seekforward', () => skip(15));
+        navigator.mediaSession.setActionHandler('nexttrack', () => playNext());
+        navigator.mediaSession.setActionHandler('previoustrack', () => playPrev());
+      } catch (e) {
+        console.debug('MediaSession handlers setup:', e);
+      }
+    }
+
     return () => {
       audio.pause();
       audio.removeEventListener('timeupdate', onTimeUpdate);
@@ -136,37 +258,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       audio.removeEventListener('ended', onEnded);
       audio.removeEventListener('error', onError);
     };
-  }, []);
-
-  const updateMediaSession = (track: ActiveTrack) => {
-    if (typeof window !== 'undefined' && 'mediaSession' in navigator) {
-      try {
-        navigator.mediaSession.metadata = new MediaMetadata({
-          title: track.title,
-          artist: "أبو سعيد مسعود ابن بيضاء",
-          album: track.series || "الشروح الصوتية",
-        });
-
-        navigator.mediaSession.setActionHandler('play', () => {
-          if (audioRef.current) {
-            audioRef.current.play().then(() => setIsPlaying(true)).catch(() => {});
-          }
-        });
-
-        navigator.mediaSession.setActionHandler('pause', () => {
-          if (audioRef.current) {
-            audioRef.current.pause();
-            setIsPlaying(false);
-          }
-        });
-
-        navigator.mediaSession.setActionHandler('seekbackward', () => skip(-15));
-        navigator.mediaSession.setActionHandler('seekforward', () => skip(15));
-      } catch (e) {
-        console.debug('MediaSession setup:', e);
-      }
-    }
-  };
+  }, [loadAndStartTrack, playNext, playPrev, skip]);
 
   const playTrack = (track: ActiveTrack) => {
     if (!audioRef.current) return;
@@ -174,13 +266,11 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
     setAudioError(null);
 
-    // If same track is already loaded
     if (currentTrack?.id === track.id) {
       if (audio.paused) {
         audio.play().then(() => {
           setIsPlaying(true);
-        }).catch(err => {
-          console.warn('Playback resume failed:', err);
+        }).catch(() => {
           setAudioError('اضغط زر التشغيل للبدء (سياسة المتصفح تطلب تفاعلاً)');
         });
       } else {
@@ -190,26 +280,35 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       return;
     }
 
-    setCurrentTrack(track);
-    setIsLoading(true);
-    setCurrentTime(0);
+    setQueue([track]);
+    queueRef.current = [track];
+    setQueueIndex(0);
+    queueIndexRef.current = 0;
+    loadAndStartTrack(track);
+  };
 
-    audio.src = track.audioUrl;
-    audio.playbackRate = playbackRate;
-    audio.volume = isMuted ? 0 : volume;
+  const playQueue = (tracks: ActiveTrack[], startIndex: number = 0) => {
+    if (!tracks || tracks.length === 0 || !audioRef.current) return;
+    const safeIdx = Math.min(Math.max(0, startIndex), tracks.length - 1);
+    const targetTrack = tracks[safeIdx];
 
-    updateMediaSession(track);
+    if (currentTrack?.id === targetTrack.id) {
+      if (audioRef.current.paused) {
+        audioRef.current.play().then(() => setIsPlaying(true)).catch(() => {
+          setAudioError('اضغط زر التشغيل للبدء (سياسة المتصفح تطلب تفاعلاً)');
+        });
+      } else {
+        audioRef.current.pause();
+        setIsPlaying(false);
+      }
+      return;
+    }
 
-    audio.play().then(() => {
-      setIsPlaying(true);
-      setIsLoading(false);
-      setAudioError(null);
-    }).catch(err => {
-      console.warn('Audio playback start warning:', err);
-      setIsLoading(false);
-      setIsPlaying(false);
-      setAudioError('يرجى النقر على زر التشغيل لبدء الاستماع');
-    });
+    setQueue(tracks);
+    queueRef.current = tracks;
+    setQueueIndex(safeIdx);
+    queueIndexRef.current = safeIdx;
+    loadAndStartTrack(targetTrack);
   };
 
   const togglePlay = () => {
@@ -223,7 +322,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       audioRef.current.play().then(() => {
         setIsPlaying(true);
         setIsLoading(false);
-      }).catch(err => {
+      }).catch(() => {
         setIsLoading(false);
         setIsPlaying(false);
         setAudioError('تعذر التشغيل، يرجى المحاولة مرة أخرى');
@@ -241,7 +340,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     audio.play().then(() => {
       setIsPlaying(true);
       setIsLoading(false);
-    }).catch(err => {
+    }).catch(() => {
       setIsLoading(false);
       setIsPlaying(false);
       setAudioError('تعذر الاتصال بالخادم، يرجى المحاولة لاحقاً');
@@ -299,14 +398,23 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }
     setIsPlaying(false);
     setCurrentTrack(null);
+    setQueue([]);
+    setQueueIndex(0);
     setCurrentTime(0);
     setAudioError(null);
   };
+
+  const hasNext = queue.length > 1 && queueIndex < queue.length - 1;
+  const hasPrev = queue.length > 1 && queueIndex > 0;
 
   return (
     <AudioContext.Provider
       value={{
         currentTrack,
+        queue,
+        queueIndex,
+        hasNext,
+        hasPrev,
         isPlaying,
         currentTime,
         duration,
@@ -316,6 +424,9 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         isLoading,
         audioError,
         playTrack,
+        playQueue,
+        playNext,
+        playPrev,
         togglePlay,
         pause,
         resume,

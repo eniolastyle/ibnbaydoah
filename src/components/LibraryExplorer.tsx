@@ -1,6 +1,7 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Book } from '../types';
 import { useLanguage } from '../context/LanguageContext';
+import { Pagination } from './Pagination';
 import {
   BookOpen,
   Search,
@@ -9,7 +10,8 @@ import {
   MessageCircle,
   Clock,
   Layers,
-  Sparkles
+  Sparkles,
+  Info
 } from 'lucide-react';
 
 interface LibraryExplorerProps {
@@ -28,6 +30,13 @@ export const LibraryExplorer: React.FC<LibraryExplorerProps> = ({
   const [statusFilter, setStatusFilter] = useState<'all' | 'مطبوع' | 'مخطوط'>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [activeBook, setActiveBook] = useState<Book | null>(null);
+  const [pdfNotice, setPdfNotice] = useState<string | null>(null);
+  const [currentPage, setCurrentPage] = useState(1);
+  const PAGE_SIZE = 6;
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [selectedCategory, statusFilter, searchQuery, books.length]);
 
   const filteredBooks = books.filter(book => {
     const matchesCategory =
@@ -43,6 +52,13 @@ export const LibraryExplorer: React.FC<LibraryExplorerProps> = ({
 
     return matchesCategory && matchesStatus && matchesSearch;
   });
+
+  const totalPages = Math.max(1, Math.ceil(filteredBooks.length / PAGE_SIZE));
+  const safePage = Math.min(currentPage, totalPages);
+  const paginatedBooks = filteredBooks.slice(
+    (safePage - 1) * PAGE_SIZE,
+    safePage * PAGE_SIZE
+  );
 
   const generateWhatsAppLink = (book: Book) => {
     const msg = encodeURIComponent(
@@ -140,13 +156,13 @@ export const LibraryExplorer: React.FC<LibraryExplorerProps> = ({
         </div>
 
         {/* Status Filter (Printed vs Manuscript) */}
-        <div className="flex flex-wrap items-center justify-between gap-4 pt-4 border-t border-[#E8DCC9] text-xs font-readex">
-          <div className="flex items-center gap-3">
-            <span className="text-[#8C6D3B] font-bold">{t('filter_by_status')}:</span>
-            <div className="inline-flex rounded-xl border border-[#E0D4C1] bg-[#FDFBF7] p-1">
+        <div className="flex flex-col sm:flex-row sm:flex-wrap sm:items-center justify-between gap-3.5 pt-4 border-t border-[#E8DCC9] text-xs font-readex">
+          <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3 w-full sm:w-auto min-w-0">
+            <span className="text-[#8C6D3B] font-bold shrink-0">{t('filter_by_status')}:</span>
+            <div className="flex flex-wrap items-center gap-1.5 rounded-xl border border-[#E0D4C1] bg-[#FDFBF7] p-1.5 w-full sm:w-auto">
               <button
                 onClick={() => setStatusFilter('all')}
-                className={`px-3 py-1.5 rounded-lg text-xs transition ${
+                className={`flex-1 sm:flex-initial text-center px-3 py-2 sm:py-1.5 rounded-lg text-xs transition whitespace-nowrap ${
                   statusFilter === 'all'
                     ? 'bg-[#0F382C] text-white font-bold shadow-xs'
                     : 'text-[#1E1E1E] hover:bg-[#F4EFE6]'
@@ -156,7 +172,7 @@ export const LibraryExplorer: React.FC<LibraryExplorerProps> = ({
               </button>
               <button
                 onClick={() => setStatusFilter('مطبوع')}
-                className={`px-3 py-1.5 rounded-lg text-xs transition ${
+                className={`flex-1 sm:flex-initial text-center px-3 py-2 sm:py-1.5 rounded-lg text-xs transition whitespace-nowrap ${
                   statusFilter === 'مطبوع'
                     ? 'bg-[#0F382C] text-white font-bold shadow-xs'
                     : 'text-[#1E1E1E] hover:bg-[#F4EFE6]'
@@ -166,7 +182,7 @@ export const LibraryExplorer: React.FC<LibraryExplorerProps> = ({
               </button>
               <button
                 onClick={() => setStatusFilter('مخطوط')}
-                className={`px-3 py-1.5 rounded-lg text-xs transition ${
+                className={`flex-1 sm:flex-initial text-center px-3 py-2 sm:py-1.5 rounded-lg text-xs transition whitespace-nowrap ${
                   statusFilter === 'مخطوط'
                     ? 'bg-[#0F382C] text-white font-bold shadow-xs'
                     : 'text-[#1E1E1E] hover:bg-[#F4EFE6]'
@@ -183,6 +199,23 @@ export const LibraryExplorer: React.FC<LibraryExplorerProps> = ({
         </div>
       </div>
 
+      {/* PDF Availability Non-Blocking Notice */}
+      {pdfNotice && (
+        <div className="p-4 rounded-2xl bg-amber-50 border border-amber-300 text-amber-900 text-xs sm:text-sm font-readex flex items-center justify-between gap-3 shadow-xs">
+          <div className="flex items-center gap-2.5">
+            <Info className="w-4 h-4 text-amber-700 shrink-0" />
+            <span>{pdfNotice}</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setPdfNotice(null)}
+            className="px-2.5 py-1 rounded-lg bg-amber-200/60 hover:bg-amber-200 text-amber-950 text-xs font-bold shrink-0"
+          >
+            ✕
+          </button>
+        </div>
+      )}
+
       {/* Books Grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8 sm:gap-10">
         {filteredBooks.length === 0 ? (
@@ -196,7 +229,7 @@ export const LibraryExplorer: React.FC<LibraryExplorerProps> = ({
             </p>
           </div>
         ) : (
-          filteredBooks.map(book => {
+          paginatedBooks.map(book => {
             const isPrinted = book.status === 'مطبوع';
 
             return (
@@ -205,9 +238,9 @@ export const LibraryExplorer: React.FC<LibraryExplorerProps> = ({
                 className="bg-white rounded-3xl border border-[#E8DCC9] shadow-[0_2px_12px_-2px_rgba(15,56,44,0.04)] hover:shadow-lg hover:border-[#0F382C]/40 transition-all duration-300 flex flex-col justify-between overflow-hidden group"
               >
                 {/* Book Card Top Banner */}
-                <div className="p-7 sm:p-8 pb-4">
+                <div className="p-6 sm:p-8 pb-4">
                   {/* Category & Status Badges */}
-                  <div className="flex items-center justify-between gap-2 mb-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
                     <span
                       className={`text-[11px] font-readex font-medium px-2.5 py-1 rounded-md border ${getCategoryColor(
                         book.category
@@ -217,7 +250,7 @@ export const LibraryExplorer: React.FC<LibraryExplorerProps> = ({
                     </span>
 
                     <span
-                      className={`text-[11px] font-readex font-bold px-2 py-0.5 rounded border ${
+                      className={`text-[11px] font-readex font-bold px-2 py-0.5 rounded border shrink-0 ${
                         isPrinted
                           ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
                           : 'bg-amber-100 text-amber-800 border-amber-300'
@@ -277,11 +310,13 @@ export const LibraryExplorer: React.FC<LibraryExplorerProps> = ({
                       <a
                         href={book.downloadUrl || '#'}
                         onClick={e => {
-                          if (book.downloadUrl === '#') {
+                          if (!book.downloadUrl || book.downloadUrl === '#') {
                             e.preventDefault();
-                            alert(lang === 'ar'
-                              ? `سيتم إتاحة النسخة الرقمية لكتاب «${book.title}» قريباً بإذن الله`
-                              : `The digital PDF edition for "${book.title}" will be released shortly inshā'Allāh`);
+                            setPdfNotice(
+                              lang === 'ar'
+                                ? `سيتم إتاحة النسخة الرقمية لكتاب «${book.title}» قريباً بإذن الله`
+                                : `The digital PDF edition for "${book.title}" will be released shortly inshā'Allāh`
+                            );
                           }
                         }}
                         className="px-3 py-1.5 rounded-lg bg-[#0F382C] text-[#FDFBF7] hover:bg-[#164E3D] text-xs font-readex flex items-center gap-1 shadow-sm transition"
@@ -308,6 +343,16 @@ export const LibraryExplorer: React.FC<LibraryExplorerProps> = ({
           })
         )}
       </div>
+
+      <Pagination
+        currentPage={safePage}
+        totalItems={filteredBooks.length}
+        pageSize={PAGE_SIZE}
+        onPageChange={(page) => {
+          setCurrentPage(page);
+          window.scrollTo({ top: 0, behavior: 'smooth' });
+        }}
+      />
 
       {/* Book Detailed Modal */}
       {activeBook && (

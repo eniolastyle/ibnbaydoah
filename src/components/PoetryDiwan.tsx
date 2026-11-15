@@ -1,7 +1,8 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Poem } from '../types';
 import { PoetryViewer } from './PoetryViewer';
 import { useLanguage } from '../context/LanguageContext';
+import { Pagination } from './Pagination';
 import {
   Feather,
   Search,
@@ -16,8 +17,14 @@ interface PoetryDiwanProps {
 
 export const PoetryDiwan: React.FC<PoetryDiwanProps> = ({ poems }) => {
   const { lang, dir, t, translateMeter, translateCategory } = useLanguage();
-  const [selectedPoem, setSelectedPoem] = useState<Poem | null>(null);
+  const [selectedPoemId, setSelectedPoemId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
+  const [currentPage, setCurrentPage] = useState(1);
+  const PAGE_SIZE = 4;
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchQuery, poems.length]);
 
   const filteredPoems = poems.filter(p => {
     if (!searchQuery.trim()) return true;
@@ -30,12 +37,23 @@ export const PoetryDiwan: React.FC<PoetryDiwanProps> = ({ poems }) => {
     );
   });
 
+  const totalPages = Math.max(1, Math.ceil(filteredPoems.length / PAGE_SIZE));
+  const safePage = Math.min(currentPage, totalPages);
+  const paginatedPoems = filteredPoems.slice(
+    (safePage - 1) * PAGE_SIZE,
+    safePage * PAGE_SIZE
+  );
+
+  const selectedPoem = selectedPoemId
+    ? poems.find(p => p.id === selectedPoemId) || null
+    : null;
+
   // If a poem is selected, render the dedicated PoetryViewer
   if (selectedPoem) {
     return (
       <PoetryViewer
         poem={selectedPoem}
-        onBack={() => setSelectedPoem(null)}
+        onBack={() => setSelectedPoemId(null)}
       />
     );
   }
@@ -85,13 +103,13 @@ export const PoetryDiwan: React.FC<PoetryDiwanProps> = ({ poems }) => {
 
       {/* Poems Cards Grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-8 sm:gap-10">
-        {filteredPoems.map(poem => {
+        {paginatedPoems.map(poem => {
           const sampleVerse = poem.verses && poem.verses.length > 0 ? poem.verses[0] : null;
 
           return (
             <div
               key={poem.id}
-              onClick={() => setSelectedPoem(poem)}
+              onClick={() => setSelectedPoemId(poem.id)}
               className="bg-white rounded-3xl border border-[#E8DCC9] shadow-[0_2px_12px_-2px_rgba(15,56,44,0.04)] hover:shadow-lg hover:border-[#0F382C]/40 transition-all duration-300 p-7 sm:p-8 flex flex-col justify-between cursor-pointer group"
             >
               <div>
@@ -144,6 +162,16 @@ export const PoetryDiwan: React.FC<PoetryDiwanProps> = ({ poems }) => {
           );
         })}
       </div>
+
+      <Pagination
+        currentPage={safePage}
+        totalItems={filteredPoems.length}
+        pageSize={PAGE_SIZE}
+        onPageChange={(page) => {
+          setCurrentPage(page);
+          window.scrollTo({ top: 0, behavior: 'smooth' });
+        }}
+      />
     </div>
   );
 };

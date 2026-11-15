@@ -1,7 +1,8 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { AudioCourse, AudienceLevelId } from '../types';
-import { useAudio } from '../context/AudioContext';
+import { useAudio, ActiveTrack } from '../context/AudioContext';
 import { useLanguage } from '../context/LanguageContext';
+import { Pagination } from './Pagination';
 import {
   Headphones,
   Play,
@@ -13,7 +14,9 @@ import {
   Clock,
   ListMusic,
   ChevronDown,
-  ChevronUp
+  ChevronUp,
+  FileText,
+  ExternalLink
 } from 'lucide-react';
 
 interface AudioLecturesHubProps {
@@ -21,18 +24,25 @@ interface AudioLecturesHubProps {
   categories: string[];
 }
 
+const AUDIOS_PAGE_SIZE = 5;
+
 export const AudioLecturesHub: React.FC<AudioLecturesHubProps> = ({
   audios,
   categories,
 }) => {
   const { lang, t, translateCategory, translateLevel, translateAudioStatus } = useLanguage();
-  const { playTrack, currentTrack, isPlaying } = useAudio();
+  const { playQueue, playTrack, togglePlay, currentTrack, isPlaying } = useAudio();
 
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
   const [selectedLevel, setSelectedLevel] = useState<string>('all');
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [expandedCourseId, setExpandedCourseId] = useState<string | null>(null);
+  const [currentPage, setCurrentPage] = useState(1);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [selectedCategory, selectedLevel, statusFilter, searchQuery, audios.length]);
 
   const filteredAudios = audios.filter(course => {
     const matchesCategory =
@@ -49,6 +59,57 @@ export const AudioLecturesHub: React.FC<AudioLecturesHubProps> = ({
 
     return matchesCategory && matchesLevel && matchesStatus && matchesSearch;
   });
+
+  const paginatedAudios = filteredAudios.slice(
+    (currentPage - 1) * AUDIOS_PAGE_SIZE,
+    currentPage * AUDIOS_PAGE_SIZE
+  );
+
+  const buildCourseTracks = (course: AudioCourse): ActiveTrack[] => {
+    const lessons = course.lessons || [];
+    return lessons.map(lesson => ({
+      id: lesson.id,
+      title: lesson.title,
+      series: course.title,
+      courseId: course.id,
+      category: course.category,
+      level: course.level,
+      levelId: course.levelId,
+      audioUrl: lesson.audioUrl,
+      duration: lesson.duration,
+    }));
+  };
+
+  const handlePlayCourse = (course: AudioCourse) => {
+    const lessons = course.lessons || [];
+    const isCourseLoaded =
+      currentTrack?.courseId === course.id ||
+      currentTrack?.id === course.id ||
+      lessons.some(l => l.id === currentTrack?.id);
+
+    if (isCourseLoaded) {
+      togglePlay();
+      return;
+    }
+
+    if (lessons.length > 0) {
+      const tracks = buildCourseTracks(course);
+      playQueue(tracks, 0);
+      setExpandedCourseId(course.id);
+    } else if (course.audioUrl) {
+      playTrack({
+        id: course.id,
+        title: course.title,
+        series: course.series,
+        courseId: course.id,
+        category: course.category,
+        level: course.level,
+        levelId: course.levelId,
+        audioUrl: course.audioUrl,
+        duration: course.duration,
+      });
+    }
+  };
 
   const getLevelBadgeClass = (levelId: AudienceLevelId | string) => {
     switch (levelId) {
@@ -194,10 +255,15 @@ export const AudioLecturesHub: React.FC<AudioLecturesHubProps> = ({
             </p>
           </div>
         ) : (
-          filteredAudios.map(course => {
+          paginatedAudios.map(course => {
+            const lessons = course.lessons || [];
+            const actualLessonCount = lessons.length;
             const isThisCoursePlaying =
-              currentTrack?.series === course.series || currentTrack?.id === course.id;
+              currentTrack?.courseId === course.id ||
+              currentTrack?.id === course.id ||
+              lessons.some(l => l.id === currentTrack?.id);
             const isExpanded = expandedCourseId === course.id;
+            const courseTracks = buildCourseTracks(course);
 
             return (
               <div
@@ -250,58 +316,93 @@ export const AudioLecturesHub: React.FC<AudioLecturesHubProps> = ({
                       {course.description}
                     </p>
 
-                    <div className="flex items-center gap-4 text-xs font-readex text-[#1E1E1E]/60 mt-3">
-                      <div className="flex items-center gap-1">
+                    <div className="flex flex-wrap items-center gap-4 text-xs font-readex text-[#1E1E1E]/60 mt-3">
+                      <div className="flex items-center gap-1 font-semibold text-[#0F382C]">
                         <ListMusic className="w-3.5 h-3.5 text-[#A58455]" />
-                        <span>{course.totalLessons} {t('recorded_lessons')}</span>
+                        <span>{actualLessonCount} {t('recorded_lessons')}</span>
                       </div>
+                      {course.expectedLessons && actualLessonCount < course.expectedLessons && (
+                        <div className="px-2.5 py-0.5 rounded-md bg-[#FAF6EE] border border-[#E8DCC9] text-[#8C6D3B] font-medium">
+                          {lang === 'ar'
+                            ? `إجمالي المنهج: ${course.expectedLessons} مجلساً`
+                            : `Syllabus: ${course.expectedLessons} sittings`}
+                        </div>
+                      )}
                       <div className="flex items-center gap-1">
                         <Clock className="w-3.5 h-3.5 text-[#A58455]" />
                         <span>{course.duration}</span>
                       </div>
                     </div>
+
+                    {course.matnTitle && (
+                      <div className="flex items-center gap-1.5 text-xs font-naskh text-[#8C6D3B] mt-2">
+                        <FileText className="w-3.5 h-3.5 shrink-0" />
+                        <span>{lang === 'ar' ? 'المتن المقرر:' : 'Text:'} {course.matnTitle}</span>
+                      </div>
+                    )}
                   </div>
 
                   {/* Actions Column */}
-                  <div className="flex items-center gap-3 shrink-0 self-start md:self-center">
-                    {/* Play Primary Track Button */}
-                    <button
-                      onClick={() =>
-                        playTrack({
-                          id: course.id,
-                          title: course.title,
-                          series: course.series,
-                          category: course.category,
-                          level: course.level,
-                          levelId: course.levelId,
-                          audioUrl: course.audioUrl,
-                          duration: course.duration,
-                        })
-                      }
-                      className="px-4 py-2.5 rounded-xl bg-[#0F382C] hover:bg-[#164E3D] text-[#FDFBF7] font-readex text-xs font-bold flex items-center gap-2 shadow-md transition"
-                    >
-                      {isThisCoursePlaying && isPlaying ? (
-                        <>
-                          <Pause className="w-4 h-4 fill-current text-[#DFC7A5]" />
-                          <span>{t('pause_audio')}</span>
-                        </>
-                      ) : (
-                        <>
-                          <Play className="w-4 h-4 fill-current text-[#DFC7A5]" />
-                          <span>{t('play_audio')}</span>
-                        </>
-                      )}
-                    </button>
+                  <div className="flex flex-wrap items-center gap-2.5 shrink-0 self-start md:self-center">
+                    {/* Play All Lectures in Course Queue */}
+                    {actualLessonCount > 0 || course.audioUrl ? (
+                      <button
+                        onClick={() => handlePlayCourse(course)}
+                        className="px-4 py-2.5 rounded-xl bg-[#0F382C] hover:bg-[#164E3D] text-[#FDFBF7] font-readex text-xs font-bold flex items-center gap-2 shadow-md transition"
+                      >
+                        {isThisCoursePlaying && isPlaying ? (
+                          <>
+                            <Pause className="w-4 h-4 fill-current text-[#DFC7A5]" />
+                            <span>{t('pause_audio')}</span>
+                          </>
+                        ) : (
+                          <>
+                            <Play className="w-4 h-4 fill-current text-[#DFC7A5]" />
+                            <span>{t('play_audio')}</span>
+                          </>
+                        )}
+                      </button>
+                    ) : (
+                      <span className="px-3.5 py-2 rounded-xl bg-[#FAF6EE] border border-[#E0D4C1] text-[#8C6D3B] font-readex text-xs font-semibold">
+                        {lang === 'ar' ? 'قريباً على السحابة الصوتية' : 'Pending R2 Audio Sync'}
+                      </span>
+                    )}
+
+                    {/* Matn PDF link when synced from R2 or set */}
+                    {course.matnPdfUrl && (
+                      <a
+                        href={course.matnPdfUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="px-3 py-2 rounded-xl bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 font-readex text-xs font-bold flex items-center gap-1.5 transition"
+                      >
+                        <FileText className="w-3.5 h-3.5" />
+                        <span>{lang === 'ar' ? 'المتن PDF' : 'Matn PDF'}</span>
+                      </a>
+                    )}
+
+                    {/* Archive fallback link if lessons not yet synced to R2 */}
+                    {actualLessonCount === 0 && course.driveFolderUrl && (
+                      <a
+                        href={course.driveFolderUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="px-3 py-2 rounded-xl bg-white hover:bg-[#F4EFE6] text-[#0F382C] border border-[#C5A880]/40 font-readex text-xs font-semibold flex items-center gap-1.5 transition"
+                      >
+                        <ExternalLink className="w-3.5 h-3.5 text-[#A58455]" />
+                        <span>{lang === 'ar' ? 'مجلد الأرشيف' : 'Archive Folder'}</span>
+                      </a>
+                    )}
 
                     {/* Expand Playlist Button */}
-                    {course.lessons && course.lessons.length > 0 && (
+                    {lessons.length > 0 && (
                       <button
                         onClick={() => toggleCourseExpand(course.id)}
                         className="p-2.5 rounded-xl border border-[#C5A880]/40 text-[#0F382C] hover:bg-[#F4EFE6] transition text-xs font-readex flex items-center gap-1 font-semibold"
                         title={lang === 'ar' ? 'عرض قائمة الأشرطة والدروس' : 'View recorded lesson playlist'}
                       >
                         <ListMusic className="w-4 h-4 text-[#A58455]" />
-                        <span>{isExpanded ? t('hide_lessons') : t('view_lessons')}</span>
+                        <span>{isExpanded ? t('hide_lessons') : `${t('view_lessons')} (${actualLessonCount})`}</span>
                         {isExpanded ? (
                           <ChevronUp className="w-3.5 h-3.5" />
                         ) : (
@@ -313,49 +414,48 @@ export const AudioLecturesHub: React.FC<AudioLecturesHubProps> = ({
                 </div>
 
                 {/* Expandable Lessons Playlist */}
-                {isExpanded && course.lessons && course.lessons.length > 0 && (
+                {isExpanded && lessons.length > 0 && (
                   <div className="bg-[#FDFBF7] border-t border-[#C5A880]/30 p-4 sm:p-6 space-y-2">
                     <h4 className="text-xs font-readex font-bold text-[#A58455] mb-3 flex items-center gap-1">
                       <ListMusic className="w-3.5 h-3.5" />
-                      <span>{t('lessons_playlist')}</span>
+                      <span>{t('lessons_playlist')} ({actualLessonCount})</span>
                     </h4>
 
-                    {course.lessons.map((lesson, idx) => {
-                      const isThisLessonPlaying =
-                        currentTrack?.id === lesson.id && isPlaying;
+                    {lessons.map((lesson, idx) => {
+                      const isThisLessonLoaded = currentTrack?.id === lesson.id;
+                      const isThisLessonPlaying = isThisLessonLoaded && isPlaying;
 
                       return (
                         <div
                           key={lesson.id}
-                          className="flex items-center justify-between p-3 rounded-xl bg-white border border-[#C5A880]/20 hover:border-[#0F382C]/40 transition text-xs font-readex"
+                          className={`flex items-center justify-between gap-3 p-3 rounded-xl border transition text-xs font-readex ${
+                            isThisLessonLoaded
+                              ? 'bg-[#F4EFE6]/80 border-[#0F382C]/50 shadow-2xs'
+                              : 'bg-white border-[#C5A880]/20 hover:border-[#0F382C]/40'
+                          }`}
                         >
-                          <div className="flex items-center gap-3">
-                            <span className="w-6 h-6 rounded-full bg-[#F4EFE6] text-[#0F382C] font-bold flex items-center justify-center text-[11px]">
+                          <div className="flex items-center gap-3 min-w-0">
+                            <span
+                              className={`w-6 h-6 rounded-full font-bold flex items-center justify-center text-[11px] shrink-0 ${
+                                isThisLessonLoaded
+                                  ? 'bg-[#0F382C] text-[#DFC7A5]'
+                                  : 'bg-[#F4EFE6] text-[#0F382C]'
+                              }`}
+                            >
                               {idx + 1}
                             </span>
-                            <span className="font-medium text-[#1E1E1E]">
+                            <span className="font-medium text-[#1E1E1E] truncate sm:whitespace-normal">
                               {lesson.title}
                             </span>
                           </div>
 
-                          <div className="flex items-center gap-3">
+                          <div className="flex items-center gap-3 shrink-0">
                             <span className="text-[#A58455] font-latin tabular-nums">
                               {lesson.duration}
                             </span>
                             <button
-                              onClick={() =>
-                                playTrack({
-                                  id: lesson.id,
-                                  title: lesson.title,
-                                  series: course.title,
-                                  category: course.category,
-                                  level: course.level,
-                                  levelId: course.levelId,
-                                  audioUrl: lesson.audioUrl,
-                                  duration: lesson.duration,
-                                })
-                              }
-                              className="p-1.5 rounded-full bg-[#0F382C] text-white hover:bg-[#164E3D] transition shadow-sm"
+                              onClick={() => playQueue(courseTracks, idx)}
+                              className="p-2 rounded-full bg-[#0F382C] text-white hover:bg-[#164E3D] transition shadow-sm"
                               title={t('play_this_lesson')}
                             >
                               {isThisLessonPlaying ? (
@@ -375,6 +475,17 @@ export const AudioLecturesHub: React.FC<AudioLecturesHubProps> = ({
           })
         )}
       </div>
+
+      {/* Pagination */}
+      <Pagination
+        currentPage={currentPage}
+        totalItems={filteredAudios.length}
+        pageSize={AUDIOS_PAGE_SIZE}
+        onPageChange={(page) => {
+          setCurrentPage(page);
+          window.scrollTo({ top: 0, behavior: 'smooth' });
+        }}
+      />
     </div>
   );
 };

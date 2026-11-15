@@ -1,4 +1,20 @@
 services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-ibn_baydoah}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change_me_in_coolify}
+      POSTGRES_DB: ${POSTGRES_DB:-ibn_baydoah}
+    volumes:
+      - ibn_baydoah_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-ibn_baydoah} -d ${POSTGRES_DB:-ibn_baydoah}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
   app:
     build:
       context: .
@@ -6,12 +22,25 @@ services:
 
     restart: unless-stopped
 
+    depends_on:
+      postgres:
+        condition: service_healthy
+
     expose:
       - "3000"
 
     environment:
       NODE_ENV: production
       PORT: "3000"
+      DATABASE_URL: ${DATABASE_URL:-postgres://${POSTGRES_USER:-ibn_baydoah}:${POSTGRES_PASSWORD:-change_me_in_coolify}@postgres:5432/${POSTGRES_DB:-ibn_baydoah}}
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+      R2_ENDPOINT: ${R2_ENDPOINT:-}
+      R2_ACCOUNT_ID: ${R2_ACCOUNT_ID:-}
+      R2_BUCKET: ${R2_BUCKET:-}
+      R2_ACCESS_KEY_ID: ${R2_ACCESS_KEY_ID:-}
+      R2_SECRET_ACCESS_KEY: ${R2_SECRET_ACCESS_KEY:-}
+      R2_PUBLIC_URL: ${R2_PUBLIC_URL:-}
 
     volumes:
       - ibn_baydoah_data:/app/server/data
@@ -23,8 +52,10 @@ services:
       interval: 20s
       timeout: 5s
       retries: 3
-      start_period: 10s
+      start_period: 15s
 
 volumes:
+  ibn_baydoah_pgdata:
+    name: ibn_baydoah_pgdata
   ibn_baydoah_data:
     name: ibn_baydoah_data

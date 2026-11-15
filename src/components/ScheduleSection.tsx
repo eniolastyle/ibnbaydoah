@@ -1,6 +1,7 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { ScheduleData, StudentQuestion } from '../types';
 import { useLanguage } from '../context/LanguageContext';
+import { Pagination } from './Pagination';
 import {
   Calendar,
   Clock,
@@ -19,6 +20,7 @@ interface ScheduleSectionProps {
   scheduleData: ScheduleData;
   questions: StudentQuestion[];
   whatsappNumber: string;
+  categories?: string[];
   onQuestionSubmitted: (q: StudentQuestion) => void;
 }
 
@@ -26,6 +28,7 @@ export const ScheduleSection: React.FC<ScheduleSectionProps> = ({
   scheduleData,
   questions,
   whatsappNumber,
+  categories,
   onQuestionSubmitted
 }) => {
   const { lang, t, translateCategory, translateDay, translateTime } = useLanguage();
@@ -37,6 +40,12 @@ export const ScheduleSection: React.FC<ScheduleSectionProps> = ({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitSuccess, setSubmitSuccess] = useState(false);
   const [questionSearch, setQuestionSearch] = useState('');
+  const [currentPage, setCurrentPage] = useState(1);
+  const PAGE_SIZE = 5;
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [questionSearch, questions.length]);
 
   const handleSubmitQuestion = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -80,6 +89,13 @@ export const ScheduleSection: React.FC<ScheduleSectionProps> = ({
     );
   });
 
+  const totalPages = Math.max(1, Math.ceil(filteredQuestions.length / PAGE_SIZE));
+  const safePage = Math.min(currentPage, totalPages);
+  const paginatedQuestions = filteredQuestions.slice(
+    (safePage - 1) * PAGE_SIZE,
+    safePage * PAGE_SIZE
+  );
+
   const sendQuestionViaWhatsApp = () => {
     const text = encodeURIComponent(
       lang === 'ar'
@@ -89,12 +105,41 @@ export const ScheduleSection: React.FC<ScheduleSectionProps> = ({
     window.open(`https://wa.me/${whatsappNumber.replace(/[^0-9]/g, '')}?text=${text}`, '_blank');
   };
 
-  const englishAcademyFeatures = [
+  const defaultEnglishAcademyFeatures = [
     "High-fidelity live stream broadcasts of in-person circles from Markaz Sībawayh in Ilorin",
     "Comprehensive study notes, summaries, and transcripts distributed in PDF format",
     "Weekly interactive revision and Q&A sessions addressing students' theological & grammatical inquiries",
     "Periodic structured assessments with completion certifications for studied classical texts"
   ];
+
+  const displayedAcademyName =
+    lang === 'ar'
+      ? scheduleData.distanceAcademy.name
+      : (scheduleData.distanceAcademy.englishName?.trim() || "Virtual Scholarly Academy of Ustādh Abu Sa'eed Ibn Baydoah");
+
+  const displayedAcademyDescription =
+    lang === 'ar'
+      ? scheduleData.distanceAcademy.description
+      : (scheduleData.distanceAcademy.englishDescription?.trim() ||
+        "A comprehensive virtual distance-learning structure connecting students of knowledge across Nigeria and the globe via Telegram channels, high-definition live audio broadcasts, weekly discussion circles, and classical text certifications.");
+
+  const displayedAcademyFeatures =
+    lang === 'ar'
+      ? (scheduleData.distanceAcademy.features || [])
+      : (scheduleData.distanceAcademy.englishFeatures && scheduleData.distanceAcademy.englishFeatures.length > 0
+          ? scheduleData.distanceAcademy.englishFeatures
+          : defaultEnglishAcademyFeatures);
+
+  const selectableCategories = categories && categories.length > 0
+    ? categories
+    : [
+        'العقيدة والتوحيد',
+        'الفقه وأصوله',
+        'الحديث وعلومه',
+        'التفسير وعلوم القرآن',
+        'النحو والصرف',
+        'الأدب والبلاغة واللغة'
+      ];
 
   return (
     <div className="space-y-12 sm:space-y-20">
@@ -191,18 +236,16 @@ export const ScheduleSection: React.FC<ScheduleSectionProps> = ({
           </div>
 
           <h3 className="font-amiri font-bold text-2xl sm:text-3xl text-[#FDFBF7] mb-3">
-            {lang === 'ar' ? scheduleData.distanceAcademy.name : "Virtual Scholarly Academy of Ustādh Abu Sa'eed Ibn Baydoah"}
+            {displayedAcademyName}
           </h3>
 
           <p className="font-naskh text-[#DFC7A5]/90 text-sm sm:text-base leading-relaxed mb-6">
-            {lang === 'ar'
-              ? scheduleData.distanceAcademy.description
-              : "A comprehensive virtual distance-learning structure connecting students of knowledge across Nigeria and the globe via Telegram channels, high-definition live audio broadcasts, weekly discussion circles, and classical text certifications."}
+            {displayedAcademyDescription}
           </p>
 
           {/* Features Grid */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-8 font-readex text-xs sm:text-sm">
-            {(lang === 'ar' ? scheduleData.distanceAcademy.features : englishAcademyFeatures).map((feat, i) => (
+            {displayedAcademyFeatures.map((feat, i) => (
               <div
                 key={i}
                 className="flex items-start gap-2.5 p-3 rounded-xl bg-white/10 border border-[#C5A880]/30"
@@ -226,7 +269,7 @@ export const ScheduleSection: React.FC<ScheduleSectionProps> = ({
             </a>
 
             <a
-              href={`https://wa.me/${whatsappNumber.replace(/[^0-9]/g, '')}`}
+              href={scheduleData.distanceAcademy.whatsappGroup || `https://wa.me/${whatsappNumber.replace(/[^0-9]/g, '')}`}
               target="_blank"
               rel="noreferrer"
               className="px-5 py-2.5 rounded-xl bg-white/10 border border-[#C5A880]/40 text-white font-readex text-xs font-medium flex items-center gap-2 hover:bg-white/20 transition"
@@ -319,11 +362,9 @@ export const ScheduleSection: React.FC<ScheduleSectionProps> = ({
                 onChange={e => setQuestionCategory(e.target.value)}
                 className="w-full px-4 py-3 rounded-xl border border-[#E0D4C1] bg-[#FDFBF7] text-xs sm:text-sm font-readex focus:outline-none focus:ring-2 focus:ring-[#0F382C]/30 focus:border-[#0F382C]"
               >
-                <option value="العقيدة والتوحيد">{translateCategory("العقيدة والتوحيد")}</option>
-                <option value="الفقه وأصوله">{translateCategory("الفقه وأصوله")}</option>
-                <option value="الحديث وعلومه">{translateCategory("الحديث وعلومه")}</option>
-                <option value="النحو والصرف">{translateCategory("النحو والصرف")}</option>
-                <option value="الأدب والبلاغة واللغة">{translateCategory("الأدب والبلاغة واللغة")}</option>
+                {selectableCategories.map(cat => (
+                  <option key={cat} value={cat}>{translateCategory(cat)}</option>
+                ))}
               </select>
             </div>
           </div>
@@ -389,7 +430,7 @@ export const ScheduleSection: React.FC<ScheduleSectionProps> = ({
           </div>
 
           <div className="space-y-4">
-            {filteredQuestions.map(item => (
+            {paginatedQuestions.map(item => (
               <div
                 key={item.id}
                 className="p-5 rounded-2xl bg-[#FDFBF7] border border-[#C5A880]/30 space-y-3"
@@ -423,6 +464,13 @@ export const ScheduleSection: React.FC<ScheduleSectionProps> = ({
               </div>
             ))}
           </div>
+
+          <Pagination
+            currentPage={safePage}
+            totalItems={filteredQuestions.length}
+            pageSize={PAGE_SIZE}
+            onPageChange={(page) => setCurrentPage(page)}
+          />
         </div>
       </div>
     </div>

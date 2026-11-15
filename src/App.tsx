@@ -180,7 +180,7 @@ function MainContent() {
                 </div>
 
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-8 sm:gap-10">
-                  {books.slice(0, 3).map(book => (
+                  {(books.some(b => b.featured) ? books.filter(b => b.featured) : books).slice(0, 3).map(book => (
                     <div
                       key={book.id}
                       onClick={() => handleNavigate('library')}
@@ -388,6 +388,7 @@ function MainContent() {
               scheduleData={scheduleData}
               questions={questions}
               whatsappNumber={profile.whatsapp}
+              categories={categories}
               onQuestionSubmitted={handleQuestionSubmitted}
             />
           </div>
@@ -400,6 +401,7 @@ function MainContent() {
               scheduleData={scheduleData}
               questions={questions}
               whatsappNumber={profile.whatsapp}
+              categories={categories}
               onQuestionSubmitted={handleQuestionSubmitted}
             />
           </div>

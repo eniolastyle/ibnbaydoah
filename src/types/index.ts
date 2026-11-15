@@ -30,6 +30,7 @@ export interface Profile {
   teaching_schedule: string;
   teachingScheduleEnglish: string;
   bio: string;
+  bioEnglish?: string;
   telegram?: string;
   youtube?: string;
   email?: string;
@@ -67,9 +68,15 @@ export interface AudioCourse {
   levelId: AudienceLevelId;
   status: 'مكتمل' | 'درس مستمر';
   totalLessons: number;
+  expectedLessons?: number;
   duration: string;
   description: string;
   audioUrl: string;
+  driveFolderId?: string;
+  driveFolderUrl?: string;
+  r2Prefix?: string;
+  matnTitle?: string;
+  matnPdfUrl?: string;
   lessons?: AudioLesson[];
 }
 
@@ -117,8 +124,11 @@ export interface ScheduleCircle {
 
 export interface DistanceAcademy {
   name: string;
+  englishName?: string;
   description: string;
+  englishDescription?: string;
   features: string[];
+  englishFeatures?: string[];
   telegramLink: string;
   whatsappGroup: string;
 }

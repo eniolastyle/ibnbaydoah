@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { IslamicSeal } from './IslamicSeal';
 import { useLanguage } from '../context/LanguageContext';
 import {
@@ -32,6 +32,25 @@ export const Navbar: React.FC<NavbarProps> = ({
 }) => {
   const { lang, toggleLanguage } = useLanguage();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [drawerTop, setDrawerTop] = useState(104);
+
+  const headerRef = useRef<HTMLElement | null>(null);
+  const mobileMenuRef = useRef<HTMLDivElement | null>(null);
+  const menuToggleRef = useRef<HTMLButtonElement | null>(null);
+
+  // Measure header bottom edge for accurate mobile drawer placement
+  useEffect(() => {
+    const updateTop = () => {
+      if (headerRef.current) {
+        setDrawerTop(Math.round(headerRef.current.getBoundingClientRect().bottom));
+      }
+    };
+    if (mobileMenuOpen) {
+      updateTop();
+    }
+    window.addEventListener('resize', updateTop);
+    return () => window.removeEventListener('resize', updateTop);
+  }, [mobileMenuOpen, lang]);
 
   // Close mobile drawer when resizing to desktop
   useEffect(() => {
@@ -43,6 +62,35 @@ export const Navbar: React.FC<NavbarProps> = ({
     window.addEventListener('resize', handleResize);
     return () => window.removeEventListener('resize', handleResize);
   }, []);
+
+  // Close mobile drawer when clicking anywhere outside or pressing Escape
+  useEffect(() => {
+    if (!mobileMenuOpen) return;
+
+    const handlePointerDown = (e: MouseEvent | TouchEvent) => {
+      const target = e.target as Node | null;
+      if (!target) return;
+      if (mobileMenuRef.current?.contains(target)) return;
+      if (menuToggleRef.current?.contains(target)) return;
+      setMobileMenuOpen(false);
+    };
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setMobileMenuOpen(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handlePointerDown);
+    document.addEventListener('touchstart', handlePointerDown);
+    document.addEventListener('keydown', handleKeyDown);
+
+    return () => {
+      document.removeEventListener('mousedown', handlePointerDown);
+      document.removeEventListener('touchstart', handlePointerDown);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [mobileMenuOpen]);
 
   // Prevent background scroll when mobile drawer is open
   useEffect(() => {
@@ -78,131 +126,150 @@ export const Navbar: React.FC<NavbarProps> = ({
       : '“Our Lord, grant us good in this world and good in the Hereafter, and protect us from the Fire.”';
 
   return (
-    <header className="sticky top-0 z-40 bg-[#FDFBF7]/95 backdrop-blur-md border-b border-[#E8DCC9] shadow-xs">
-      {/* 1. Serene Top Du'ā Ribbon - Single-line, perfectly balanced */}
-      <div className="bg-[#0B2C23] text-[#DFC7A5] py-2 px-3 sm:px-4 border-b border-[#C5A880]/20 text-center relative overflow-hidden">
-        <div className="absolute inset-0 bg-arabesque-dark opacity-25 pointer-events-none" />
-        <div className="max-w-5xl mx-auto flex items-center justify-center relative z-10">
-          <p className="text-[11px] sm:text-xs md:text-sm font-medium tracking-wide text-[#E8D7BE] select-text font-amiri text-center truncate">
-            <span className="text-[#C5A880]/70 mx-1.5">۞</span>
-            {displayedDua}
-            <span className="text-[#C5A880]/70 mx-1.5">۞</span>
-          </p>
-        </div>
-      </div>
-
-      {/* 2. Main Navigation Bar */}
-      <div className="max-w-7xl mx-auto px-3 sm:px-6 lg:px-8">
-        <div className="flex items-center justify-between h-18 sm:h-20 gap-2 sm:gap-4">
-          {/* Brand & Seal - Mobile-Optimized */}
-          <div
-            onClick={() => handleNavClick('home')}
-            className="flex items-center gap-2.5 sm:gap-3.5 cursor-pointer group select-none min-w-0"
-          >
-            {/* Seal with responsive size */}
-            <div className="shrink-0">
-              <IslamicSeal size="sm" variant="emerald" />
-            </div>
-
-            <div className="flex flex-col min-w-0">
-              <span className="font-amiri font-bold text-base sm:text-xl text-[#0F382C] tracking-tight group-hover:text-[#185341] transition truncate">
-                {lang === 'ar' ? 'أَبُو سَعِيدٍ ابْنُ بَيْضَاءَ' : 'Ibn Baydoah'}
-              </span>
-              <span className="hidden sm:inline text-[11px] text-[#9A7947] font-readex font-medium truncate max-w-[220px] lg:max-w-none">
-                {lang === 'ar' ? 'طالب علم وباحث في العلوم الشرعية واللغوية' : 'Classical Islamic & Linguistic Studies'}
-              </span>
-            </div>
+    <>
+      <header
+        ref={headerRef}
+        className="sticky top-0 z-50 bg-[#FDFBF7]/95 backdrop-blur-md border-b border-[#E8DCC9] shadow-xs"
+      >
+        {/* 1. Serene Top Du'ā Ribbon - Single-line, perfectly balanced */}
+        <div className="bg-[#0B2C23] text-[#DFC7A5] py-2 px-3 sm:px-4 border-b border-[#C5A880]/20 text-center relative overflow-hidden">
+          <div className="absolute inset-0 bg-arabesque-dark opacity-25 pointer-events-none" />
+          <div className="max-w-5xl mx-auto flex items-center justify-center relative z-10">
+            <p className="text-[11px] sm:text-xs md:text-sm font-medium tracking-wide text-[#E8D7BE] select-text font-amiri text-center truncate">
+              <span className="text-[#C5A880]/70 mx-1.5">۞</span>
+              {displayedDua}
+              <span className="text-[#C5A880]/70 mx-1.5">۞</span>
+            </p>
           </div>
+        </div>
 
-          {/* Desktop Nav Items - Clean, uncluttered tabs */}
-          <nav className="hidden lg:flex items-center gap-1.5 xl:gap-2">
-            {navItems.map((item) => {
-              const isActive = activeTab === item.id;
-              return (
-                <button
-                  key={item.id}
-                  onClick={() => handleNavClick(item.id)}
-                  className={`px-3.5 py-2 rounded-xl text-xs xl:text-sm font-readex transition-all duration-200 whitespace-nowrap ${
-                    isActive
-                      ? 'bg-[#0F382C] text-white shadow-xs font-semibold'
-                      : 'text-[#2D312E] hover:text-[#0F382C] hover:bg-[#F2ECE1] font-medium'
-                  }`}
-                >
-                  {lang === 'ar' ? item.labelAr : item.labelEn}
-                </button>
-              );
-            })}
-          </nav>
-
-          {/* Right Action Utilities */}
-          <div className="flex items-center gap-1.5 sm:gap-2.5 shrink-0">
-            {/* Quick Ask CTA Button (Desktop & Tablet) */}
-            <button
-              onClick={() => handleNavClick('contact')}
-              className={`hidden md:flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-readex font-semibold transition border shadow-xs ${
-                activeTab === 'contact'
-                  ? 'bg-[#0F382C] text-white border-[#0F382C]'
-                  : 'bg-[#C5A880]/15 text-[#0F382C] border-[#C5A880]/40 hover:bg-[#C5A880]/25'
-              }`}
+        {/* 2. Main Navigation Bar */}
+        <div className="max-w-7xl mx-auto px-3 sm:px-6 lg:px-8">
+          <div className="flex items-center justify-between h-18 sm:h-20 gap-2 sm:gap-4">
+            {/* Brand & Seal - Mobile-Optimized */}
+            <div
+              onClick={() => handleNavClick('home')}
+              className="flex items-center gap-2.5 sm:gap-3.5 cursor-pointer group select-none min-w-0"
             >
-              <MessageSquare className="w-3.5 h-3.5 text-[#A58455]" />
-              <span>{lang === 'ar' ? 'طرح سؤال' : 'Ask Question'}</span>
-            </button>
+              {/* Seal with responsive size */}
+              <div className="shrink-0">
+                <IslamicSeal size="sm" variant="emerald" />
+              </div>
 
-            {/* Quick Search */}
-            {onOpenSearch && (
+              <div className="flex flex-col min-w-0">
+                <span className="font-amiri font-bold text-base sm:text-xl text-[#0F382C] tracking-tight group-hover:text-[#185341] transition truncate">
+                  {lang === 'ar' ? 'أَبُو سَعِيدٍ ابْنُ بَيْضَاءَ' : 'Ibn Baydoah'}
+                </span>
+                <span className="hidden sm:inline text-[11px] text-[#9A7947] font-readex font-medium truncate max-w-[220px] lg:max-w-none">
+                  {lang === 'ar' ? 'طالب علم وباحث في العلوم الشرعية واللغوية' : 'Classical Islamic & Linguistic Studies'}
+                </span>
+              </div>
+            </div>
+
+            {/* Desktop Nav Items - Clean, uncluttered tabs */}
+            <nav className="hidden lg:flex items-center gap-1.5 xl:gap-2">
+              {navItems.map((item) => {
+                const isActive = activeTab === item.id;
+                return (
+                  <button
+                    key={item.id}
+                    onClick={() => handleNavClick(item.id)}
+                    className={`px-3.5 py-2 rounded-xl text-xs xl:text-sm font-readex transition-all duration-200 whitespace-nowrap ${
+                      isActive
+                        ? 'bg-[#0F382C] text-white shadow-xs font-semibold'
+                        : 'text-[#2D312E] hover:text-[#0F382C] hover:bg-[#F2ECE1] font-medium'
+                    }`}
+                  >
+                    {lang === 'ar' ? item.labelAr : item.labelEn}
+                  </button>
+                );
+              })}
+            </nav>
+
+            {/* Right Action Utilities */}
+            <div className="flex items-center gap-1.5 sm:gap-2.5 shrink-0">
+              {/* Quick Ask CTA Button (Desktop & Tablet) */}
               <button
-                onClick={onOpenSearch}
-                className="w-9 h-9 sm:w-10 sm:h-10 flex items-center justify-center rounded-xl text-[#0F382C] hover:bg-[#F2ECE1] border border-[#E0D4C1] transition"
-                title={lang === 'ar' ? 'بحث شامل في المنصة' : 'Search platform'}
-                aria-label="Search"
+                onClick={() => handleNavClick('contact')}
+                className={`hidden md:flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-readex font-semibold transition border shadow-xs ${
+                  activeTab === 'contact'
+                    ? 'bg-[#0F382C] text-white border-[#0F382C]'
+                    : 'bg-[#C5A880]/15 text-[#0F382C] border-[#C5A880]/40 hover:bg-[#C5A880]/25'
+                }`}
               >
-                <Search className="w-4 h-4" />
+                <MessageSquare className="w-3.5 h-3.5 text-[#A58455]" />
+                <span>{lang === 'ar' ? 'طرح سؤال' : 'Ask Question'}</span>
               </button>
-            )}
 
-            {/* Language Switcher */}
-            <button
-              onClick={toggleLanguage}
-              className="h-9 sm:h-10 px-2.5 sm:px-3 flex items-center gap-1.5 rounded-xl border border-[#E0D4C1] bg-white text-xs font-readex text-[#0F382C] hover:bg-[#F2ECE1] transition shadow-xs"
-              title="تغيير اللغة / Switch Language"
-              aria-label="Toggle language"
-            >
-              <Languages className="w-3.5 h-3.5 text-[#A58455]" />
-              <span className="font-bold text-[11px] sm:text-xs">{lang === 'ar' ? 'EN' : 'عربي'}</span>
-            </button>
+              {/* Quick Search */}
+              {onOpenSearch && (
+                <button
+                  onClick={() => {
+                    setMobileMenuOpen(false);
+                    onOpenSearch();
+                  }}
+                  className="w-9 h-9 sm:w-10 sm:h-10 flex items-center justify-center rounded-xl text-[#0F382C] hover:bg-[#F2ECE1] border border-[#E0D4C1] transition"
+                  title={lang === 'ar' ? 'بحث شامل في المنصة' : 'Search platform'}
+                  aria-label="Search"
+                >
+                  <Search className="w-4 h-4" />
+                </button>
+              )}
 
-            {/* Discreet Admin Lock Button (Desktop) */}
-            <button
-              onClick={() => handleNavClick('admin')}
-              className={`hidden sm:flex w-9 h-9 sm:w-10 sm:h-10 items-center justify-center rounded-xl border transition ${
-                activeTab === 'admin'
-                  ? 'bg-[#0F382C] text-white border-[#0F382C]'
-                  : 'text-[#A58455] hover:text-[#0F382C] border-[#E0D4C1] hover:bg-[#F2ECE1]'
-              }`}
-              title={lang === 'ar' ? 'لوحة تحكم الإدارة' : 'Admin Portal'}
-              aria-label="Admin Portal"
-            >
-              <Lock className="w-4 h-4" />
-            </button>
+              {/* Language Switcher */}
+              <button
+                onClick={toggleLanguage}
+                className="h-9 sm:h-10 px-2.5 sm:px-3 flex items-center gap-1.5 rounded-xl border border-[#E0D4C1] bg-white text-xs font-readex text-[#0F382C] hover:bg-[#F2ECE1] transition shadow-xs"
+                title="تغيير اللغة / Switch Language"
+                aria-label="Toggle language"
+              >
+                <Languages className="w-3.5 h-3.5 text-[#A58455]" />
+                <span className="font-bold text-[11px] sm:text-xs">{lang === 'ar' ? 'EN' : 'عربي'}</span>
+              </button>
 
-            {/* Mobile Menu Button - Guaranteed Touch Target */}
-            <button
-              onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
-              className="lg:hidden w-10 h-10 flex items-center justify-center rounded-xl text-[#0F382C] hover:bg-[#F2ECE1] border border-[#E0D4C1] transition"
-              title={lang === 'ar' ? 'القائمة الرئيسية' : 'Main Menu'}
-              aria-label="Toggle mobile menu"
-            >
-              {mobileMenuOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
-            </button>
+              {/* Discreet Admin Lock Button (Desktop) */}
+              <button
+                onClick={() => handleNavClick('admin')}
+                className={`hidden sm:flex w-9 h-9 sm:w-10 sm:h-10 items-center justify-center rounded-xl border transition ${
+                  activeTab === 'admin'
+                    ? 'bg-[#0F382C] text-white border-[#0F382C]'
+                    : 'text-[#A58455] hover:text-[#0F382C] border-[#E0D4C1] hover:bg-[#F2ECE1]'
+                }`}
+                title={lang === 'ar' ? 'لوحة تحكم الإدارة' : 'Admin Portal'}
+                aria-label="Admin Portal"
+              >
+                <Lock className="w-4 h-4" />
+              </button>
+
+              {/* Mobile Menu Button - Guaranteed Touch Target */}
+              <button
+                ref={menuToggleRef}
+                onClick={() => setMobileMenuOpen(prev => !prev)}
+                className="lg:hidden w-10 h-10 flex items-center justify-center rounded-xl text-[#0F382C] hover:bg-[#F2ECE1] border border-[#E0D4C1] transition"
+                title={lang === 'ar' ? 'القائمة الرئيسية' : 'Main Menu'}
+                aria-label="Toggle mobile menu"
+                aria-expanded={mobileMenuOpen}
+              >
+                {mobileMenuOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
+              </button>
+            </div>
           </div>
         </div>
-      </div>
+      </header>
 
-      {/* 3. Full Mobile Drawer & Backdrop */}
+      {/* 3. Full Mobile Drawer & Backdrop (outside backdrop-blur header so fixed inset-0 covers full viewport) */}
       {mobileMenuOpen && (
-        <div className="lg:hidden fixed inset-0 top-[calc(theme(spacing.18)+theme(spacing.8)+1px)] sm:top-[calc(theme(spacing.20)+theme(spacing.8)+1px)] z-50 bg-[#0B2C23]/40 backdrop-blur-sm">
-          <div className="bg-[#FDFBF7] border-b border-[#E8DCC9] shadow-2xl px-5 pt-3 pb-8 space-y-4 max-h-[calc(100vh-100px)] overflow-y-auto animate-fadeIn">
+        <div
+          onClick={() => setMobileMenuOpen(false)}
+          style={{ top: `${drawerTop}px` }}
+          className="lg:hidden fixed inset-x-0 bottom-0 z-45 bg-[#0B2C23]/45 backdrop-blur-sm"
+        >
+          <div
+            ref={mobileMenuRef}
+            onClick={e => e.stopPropagation()}
+            style={{ maxHeight: `calc(100vh - ${drawerTop}px)` }}
+            className="bg-[#FDFBF7] border-b border-[#E8DCC9] shadow-2xl px-5 pt-3 pb-8 space-y-4 overflow-y-auto animate-fadeIn"
+          >
             <div className="space-y-1">
               <p className="text-[11px] font-readex uppercase tracking-wider text-[#A58455] px-2 py-1 font-semibold">
                 {lang === 'ar' ? 'أقسام المنصة العلمية' : 'Platform Sections'}
@@ -254,6 +321,6 @@ export const Navbar: React.FC<NavbarProps> = ({
           </div>
         </div>
       )}
-    </header>
+    </>
   );
 };

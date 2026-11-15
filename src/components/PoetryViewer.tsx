@@ -1,6 +1,7 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Poem, PoemVerse } from '../types';
 import { useLanguage } from '../context/LanguageContext';
+import { Pagination } from './Pagination';
 import {
   Copy,
   Check,
@@ -16,16 +17,22 @@ interface PoetryViewerProps {
 }
 
 export const PoetryViewer: React.FC<PoetryViewerProps> = ({ poem, onBack }) => {
-  const { lang, t, translateMeter, translateCategory } = useLanguage();
+  const { t, translateMeter, translateCategory } = useLanguage();
   const [fontSize, setFontSize] = useState<'normal' | 'large' | 'xlarge'>('large');
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [focusedVerse, setFocusedVerse] = useState<number | null>(null);
+  const [currentPage, setCurrentPage] = useState(1);
+  const PAGE_SIZE = 15;
 
-  const handleCopyVerse = (verse: PoemVerse, index: number) => {
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchQuery, poem.id]);
+
+  const handleCopyVerse = (verse: PoemVerse, keyNum: number) => {
     const text = `${verse.sadr} ۞ ${verse.ajuz}\n[${poem.title} - ${t('verse_word')} ${verse.number}]`;
     navigator.clipboard.writeText(text);
-    setCopiedIndex(index);
+    setCopiedIndex(keyNum);
     setTimeout(() => setCopiedIndex(null), 2200);
   };
 
@@ -34,6 +41,13 @@ export const PoetryViewer: React.FC<PoetryViewerProps> = ({ poem, onBack }) => {
     const q = searchQuery.toLowerCase();
     return v.sadr.toLowerCase().includes(q) || v.ajuz.toLowerCase().includes(q) || String(v.number) === q;
   });
+
+  const totalPages = Math.max(1, Math.ceil(filteredVerses.length / PAGE_SIZE));
+  const safePage = Math.min(currentPage, totalPages);
+  const paginatedVerses = filteredVerses.slice(
+    (safePage - 1) * PAGE_SIZE,
+    safePage * PAGE_SIZE
+  );
 
   const getFontSizeClass = () => {
     switch (fontSize) {
@@ -159,13 +173,14 @@ export const PoetryViewer: React.FC<PoetryViewerProps> = ({ poem, onBack }) => {
             {t('no_verses_found')}
           </div>
         ) : (
-          filteredVerses.map((verse, idx) => {
-            const isCopied = copiedIndex === idx;
+          paginatedVerses.map((verse, idx) => {
+            const verseKey = verse.number || ((safePage - 1) * PAGE_SIZE + idx + 1);
+            const isCopied = copiedIndex === verseKey;
             const isFocused = focusedVerse === verse.number;
 
             return (
               <div
-                key={verse.number || idx}
+                key={verseKey}
                 onClick={() => setFocusedVerse(isFocused ? null : verse.number)}
                 className={`group relative p-4 sm:p-6 rounded-xl border transition-all duration-200 cursor-pointer ${
                   isFocused
@@ -187,7 +202,7 @@ export const PoetryViewer: React.FC<PoetryViewerProps> = ({ poem, onBack }) => {
                   <button
                     onClick={(e) => {
                       e.stopPropagation();
-                      handleCopyVerse(verse, idx);
+                      handleCopyVerse(verse, verseKey);
                     }}
                     className="flex items-center gap-1 px-2.5 py-1 rounded bg-[#F4EFE6] hover:bg-[#C5A880]/20 text-[#0F382C] text-xs transition border border-[#C5A880]/30"
                     title={t('copy_verse')}
@@ -234,6 +249,16 @@ export const PoetryViewer: React.FC<PoetryViewerProps> = ({ poem, onBack }) => {
             );
           })
         )}
+
+        <Pagination
+          currentPage={safePage}
+          totalItems={filteredVerses.length}
+          pageSize={PAGE_SIZE}
+          onPageChange={(page) => {
+            setCurrentPage(page);
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+          }}
+        />
       </div>
 
       {/* Footer Info */}

@@ -21,17 +21,21 @@ ENV PORT=3000
 COPY package*.json ./
 RUN npm ci --omit=dev
 
-# Copy compiled frontend and server files
+# Copy compiled frontend, server, database schema/store, and seed files
 COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/server.ts ./server.ts
 COPY --from=builder /app/server ./server
+COPY --from=builder /app/src/db ./src/db
+COPY --from=builder /app/src/types ./src/types
+COPY --from=builder /app/scripts ./scripts
+COPY --from=builder /app/drizzle.config.ts ./drizzle.config.ts
 COPY --from=builder /app/tsconfig.json ./tsconfig.json
 
-# Ensure persistent data directory exists
+# Ensure persistent data directory exists for fallback JSON & backups
 RUN mkdir -p /app/server/data
 
 # Coolify / Docker Healthcheck
-HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
   CMD wget --no-verbose --tries=1 --spider http://127.0.0.1:3000/api/health || exit 1
 
 EXPOSE 3000

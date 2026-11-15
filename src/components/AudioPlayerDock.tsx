@@ -15,12 +15,18 @@ import {
   Download,
   AlertCircle,
   RefreshCw,
-  Maximize2
+  Maximize2,
+  SkipBack,
+  SkipForward
 } from 'lucide-react';
 
 export const AudioPlayerDock: React.FC = () => {
   const {
     currentTrack,
+    queue,
+    queueIndex,
+    hasNext,
+    hasPrev,
     isPlaying,
     currentTime,
     duration,
@@ -29,6 +35,8 @@ export const AudioPlayerDock: React.FC = () => {
     isMuted,
     isLoading,
     audioError,
+    playNext,
+    playPrev,
     togglePlay,
     seek,
     skip,
@@ -104,7 +112,11 @@ export const AudioPlayerDock: React.FC = () => {
 
             <div className="text-center">
               <span className="text-[11px] font-readex uppercase tracking-widest text-[#DFC7A5]/80 block">
-                {lang === 'ar' ? 'المجلس الصوتي الجاري' : 'Now Playing'}
+                {queue.length > 1
+                  ? (lang === 'ar'
+                      ? `الدرس ${queueIndex + 1} من ${queue.length}`
+                      : `Lesson ${queueIndex + 1} of ${queue.length}`)
+                  : (lang === 'ar' ? 'المجلس الصوتي الجاري' : 'Now Playing')}
               </span>
               <span className="text-xs font-readex text-white/90 font-medium truncate max-w-[200px] block">
                 {currentTrack.series}
@@ -202,7 +214,19 @@ export const AudioPlayerDock: React.FC = () => {
             </div>
 
             {/* Primary Transport Controls */}
-            <div className="flex items-center justify-center gap-6 pt-1">
+            <div className="flex items-center justify-center gap-4 pt-1">
+              {/* Previous Lesson in Queue */}
+              {queue.length > 1 && (
+                <button
+                  onClick={playPrev}
+                  disabled={!hasPrev}
+                  className="w-10 h-10 rounded-full bg-white/10 hover:bg-white/20 disabled:opacity-30 disabled:pointer-events-none active:scale-95 text-[#DFC7A5] hover:text-white flex items-center justify-center transition"
+                  title={lang === 'ar' ? 'الدرس السابق' : 'Previous lesson'}
+                >
+                  <SkipBack className="w-4 h-4 rtl:rotate-180" />
+                </button>
+              )}
+
               {/* Skip -15s */}
               <button
                 onClick={() => skip(-15)}
@@ -237,6 +261,18 @@ export const AudioPlayerDock: React.FC = () => {
                 <RotateCw className="w-5 h-5" />
                 <span className="text-[9px] font-latin font-bold -mt-0.5">15</span>
               </button>
+
+              {/* Next Lesson in Queue */}
+              {queue.length > 1 && (
+                <button
+                  onClick={playNext}
+                  disabled={!hasNext}
+                  className="w-10 h-10 rounded-full bg-white/10 hover:bg-white/20 disabled:opacity-30 disabled:pointer-events-none active:scale-95 text-[#DFC7A5] hover:text-white flex items-center justify-center transition"
+                  title={lang === 'ar' ? 'الدرس التالي' : 'Next lesson'}
+                >
+                  <SkipForward className="w-4 h-4 rtl:rotate-180" />
+                </button>
+              )}
             </div>
 
             {/* Speed Pills Bar */}
@@ -414,14 +450,31 @@ export const AudioPlayerDock: React.FC = () => {
                   )}
                 </div>
                 <p className="text-xs text-[#DFC7A5]/80 font-readex truncate">
-                  {currentTrack.series}
+                  {queue.length > 1
+                    ? `${currentTrack.series} • ${
+                        lang === 'ar'
+                          ? `الدرس ${queueIndex + 1} من ${queue.length}`
+                          : `Lesson ${queueIndex + 1} of ${queue.length}`
+                      }`
+                    : currentTrack.series}
                 </p>
               </div>
             </div>
 
             {/* Center: Controls & Scrubber */}
             <div className="flex-1 max-w-xl flex flex-col items-center gap-1.5">
-              <div className="flex items-center gap-4">
+              <div className="flex items-center gap-3">
+                {queue.length > 1 && (
+                  <button
+                    onClick={playPrev}
+                    disabled={!hasPrev}
+                    title={lang === 'ar' ? 'الدرس السابق' : 'Previous lesson'}
+                    className="p-2 rounded-full hover:bg-white/10 disabled:opacity-30 disabled:pointer-events-none text-[#DFC7A5] hover:text-white transition active:scale-95"
+                  >
+                    <SkipBack className="w-4 h-4 rtl:rotate-180" />
+                  </button>
+                )}
+
                 {/* 15s backward */}
                 <button
                   onClick={() => skip(-15)}
@@ -454,6 +507,17 @@ export const AudioPlayerDock: React.FC = () => {
                 >
                   <RotateCw className="w-4 h-4" />
                 </button>
+
+                {queue.length > 1 && (
+                  <button
+                    onClick={playNext}
+                    disabled={!hasNext}
+                    title={lang === 'ar' ? 'الدرس التالي' : 'Next lesson'}
+                    className="p-2 rounded-full hover:bg-white/10 disabled:opacity-30 disabled:pointer-events-none text-[#DFC7A5] hover:text-white transition active:scale-95"
+                  >
+                    <SkipForward className="w-4 h-4 rtl:rotate-180" />
+                  </button>
+                )}
               </div>
 
               {/* Progress Bar & Timestamps */}
