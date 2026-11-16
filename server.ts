@@ -1,5 +1,6 @@
 import 'dotenv/config';
 import express from 'express';
+import http from 'http';
 import crypto from 'crypto';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -837,11 +838,15 @@ async function startServer() {
   await dataStore.init();
 
   const isProduction = process.env.NODE_ENV === 'production';
+  const httpServer = http.createServer(app);
 
   if (!isProduction) {
     const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      server: {
+        middlewareMode: true,
+        ws: { server: httpServer },
+      },
       appType: 'spa',
     });
     app.use(vite.middlewares);
@@ -853,7 +858,7 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, '0.0.0.0', () => {
+  httpServer.listen(PORT, '0.0.0.0', () => {
     console.log(
       `[Ibn Baydoah Server] Running on http://0.0.0.0:${PORT} in ${isProduction ? 'production' : 'development'} mode (${dataStore.getEngineInfo().engine})`
     );

@@ -24,33 +24,127 @@ export function hasPostgresConfig(): boolean {
   );
 }
 
-function buildPoolConfig() {
-  const connectionString = process.env.DATABASE_URL?.trim();
+interface PoolCandidate {
+  label: string;
+  targetSummary: string;
+  config: {
+    connectionString?: string;
+    host?: string;
+    port?: number;
+    user?: string;
+    password?: string;
+    database?: string;
+    connectionTimeoutMillis: number;
+    idleTimeoutMillis: number;
+    max: number;
+    ssl?: { rejectUnauthorized: boolean };
+  };
+}
+
+function pickNonEmpty(...vals: Array<string | undefined>): string | undefined {
+  for (const v of vals) {
+    if (typeof v === 'string' && v.trim().length > 0) {
+      return v.trim();
+    }
+  }
+  return undefined;
+}
+
+function sanitizeDbUrlSummary(rawUrl: string): string {
+  try {
+    const u = new URL(rawUrl);
+    const user = u.username ? decodeURIComponent(u.username) : '(default)';
+    const dbName = u.pathname.replace(/^\//, '') || '(default)';
+    return `${user}@${u.hostname}:${u.port || '5432'}/${dbName}`;
+  } catch {
+    return '(invalid DATABASE_URL format)';
+  }
+}
+
+function isPlaceholderDatabaseUrl(rawUrl: string): boolean {
+  return (
+    rawUrl.includes('YOUR_STRONG_POSTGRES_PASSWORD') ||
+    rawUrl.includes('YOUR_PASSWORD') ||
+    rawUrl.includes('change_me')
+  );
+}
+
+function buildPoolCandidates(): PoolCandidate[] {
+  const candidates: PoolCandidate[] = [];
+  const connectionString = pickNonEmpty(process.env.DATABASE_URL);
+  const discreteHost = pickNonEmpty(
+    process.env.POSTGRES_HOST,
+    process.env.PGHOST,
+    process.env.SQL_HOST
+  );
+  const discreteUser = pickNonEmpty(
+    process.env.POSTGRES_USER,
+    process.env.PGUSER,
+    process.env.SQL_USER
+  );
+  const discretePassword =
+    process.env.POSTGRES_PASSWORD ||
+    process.env.PGPASSWORD ||
+    process.env.SQL_PASSWORD ||
+    '';
+  const discreteDb = pickNonEmpty(
+    process.env.POSTGRES_DB,
+    process.env.PGDATABASE,
+    process.env.SQL_DATABASE
+  );
+  const discretePort = Number(
+    pickNonEmpty(process.env.POSTGRES_PORT, process.env.PGPORT, process.env.SQL_PORT) || 5432
+  );
+
   const requireSsl =
     process.env.PGSSLMODE === 'require' ||
     Boolean(connectionString && connectionString.includes('sslmode=require'));
 
-  if (connectionString) {
-    return {
-      connectionString,
-      connectionTimeoutMillis: 4500,
-      idleTimeoutMillis: 30000,
-      max: 10,
-      ...(requireSsl ? { ssl: { rejectUnauthorized: false } } : {}),
-    };
+  const discreteCandidate: PoolCandidate | null = discreteHost
+    ? {
+        label: 'POSTGRES_ENV',
+        targetSummary: `${discreteUser || 'ibn_baydoah'}@${discreteHost}:${discretePort}/${discreteDb || 'ibn_baydoah'}`,
+        config: {
+          host: discreteHost,
+          port: discretePort,
+          user: discreteUser || 'ibn_baydoah',
+          password: discretePassword,
+          database: discreteDb || 'ibn_baydoah',
+          connectionTimeoutMillis: 4500,
+          idleTimeoutMillis: 30000,
+          max: 10,
+          ...(process.env.PGSSLMODE === 'require' ? { ssl: { rejectUnauthorized: false } } : {}),
+        },
+      }
+    : null;
+
+  const urlCandidate: PoolCandidate | null =
+    connectionString && !isPlaceholderDatabaseUrl(connectionString)
+      ? {
+          label: 'DATABASE_URL',
+          targetSummary: sanitizeDbUrlSummary(connectionString),
+          config: {
+            connectionString,
+            connectionTimeoutMillis: 4500,
+            idleTimeoutMillis: 30000,
+            max: 10,
+            ...(requireSsl ? { ssl: { rejectUnauthorized: false } } : {}),
+          },
+        }
+      : null;
+
+  // When running in Docker Compose (POSTGRES_HOST=postgres), prefer discrete POSTGRES_* first
+  // because the postgres container initializes directly from POSTGRES_USER/POSTGRES_PASSWORD/POSTGRES_DB,
+  // avoiding mismatched or unencoded special-character issues in DATABASE_URL. Still fall back to DATABASE_URL.
+  if (discreteHost === 'postgres') {
+    if (discreteCandidate) candidates.push(discreteCandidate);
+    if (urlCandidate) candidates.push(urlCandidate);
+  } else {
+    if (urlCandidate) candidates.push(urlCandidate);
+    if (discreteCandidate) candidates.push(discreteCandidate);
   }
 
-  return {
-    host: process.env.PGHOST?.trim() || process.env.POSTGRES_HOST?.trim() || process.env.SQL_HOST?.trim() || '127.0.0.1',
-    port: Number(process.env.PGPORT || process.env.POSTGRES_PORT || process.env.SQL_PORT || 5432),
-    user: process.env.PGUSER?.trim() || process.env.POSTGRES_USER?.trim() || process.env.SQL_USER?.trim() || 'ibn_baydoah',
-    password: process.env.PGPASSWORD ?? process.env.POSTGRES_PASSWORD ?? process.env.SQL_PASSWORD ?? '',
-    database: process.env.PGDATABASE?.trim() || process.env.POSTGRES_DB?.trim() || process.env.SQL_DATABASE?.trim() || 'ibn_baydoah',
-    connectionTimeoutMillis: 4500,
-    idleTimeoutMillis: 30000,
-    max: 10,
-    ...(requireSsl ? { ssl: { rejectUnauthorized: false } } : {}),
-  };
+  return candidates;
 }
 
 async function ensureSchemaDDL(pgPool: Pool): Promise<void> {
@@ -367,38 +461,67 @@ export async function initDatabase(): Promise<{ engine: 'postgres' | 'json'; pgC
     return { engine: 'json', pgConfigured: false };
   }
 
+  const candidates = buildPoolCandidates();
+  if (candidates.length === 0) {
+    if (isProduction) {
+      throw new Error(
+        '[PostgreSQL] FATAL: No valid PostgreSQL connection configuration found (DATABASE_URL appears to be a placeholder and POSTGRES_HOST is unset).'
+      );
+    }
+    pgAvailable = false;
+    return { engine: 'json', pgConfigured: false };
+  }
+
   const maxAttempts = isProduction ? 6 : 1;
   let lastError: Error | null = null;
+  let lastPgCode: string | undefined;
+  let lastTarget = candidates[0].targetSummary;
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    try {
-      pool = new Pool(buildPoolConfig());
-      await pool.query('SELECT 1');
-      await ensureSchemaDDL(pool);
-      db = drizzle(pool, { schema });
-      await seedIfEmpty(pool, db);
-      pgAvailable = true;
-      console.log('[Storage] Connected to PostgreSQL and verified schema + catalog seed.');
-      return { engine: 'postgres', pgConfigured: true };
-    } catch (err) {
-      lastError = err as Error;
-      if (pool) {
-        await pool.end().catch(() => {});
-        pool = null;
-      }
-      db = null;
-      pgAvailable = false;
-
-      if (isProduction && attempt < maxAttempts) {
-        console.warn(
-          `[PostgreSQL] Connection attempt ${attempt}/${maxAttempts} failed (${lastError.message}). Retrying in 2s...`
+    for (const candidate of candidates) {
+      lastTarget = candidate.targetSummary;
+      try {
+        pool = new Pool(candidate.config);
+        await pool.query('SELECT 1');
+        await ensureSchemaDDL(pool);
+        db = drizzle(pool, { schema });
+        await seedIfEmpty(pool, db);
+        pgAvailable = true;
+        console.log(
+          `[Storage] Connected to PostgreSQL via ${candidate.label} (${candidate.targetSummary}) and verified schema + catalog seed.`
         );
-        await sleep(2000);
+        return { engine: 'postgres', pgConfigured: true };
+      } catch (err) {
+        lastError = err as Error;
+        lastPgCode = (err as { code?: string })?.code;
+        if (pool) {
+          await pool.end().catch(() => {});
+          pool = null;
+        }
+        db = null;
+        pgAvailable = false;
+        if (candidates.length > 1) {
+          console.warn(
+            `[PostgreSQL] Candidate ${candidate.label} (${candidate.targetSummary}) failed (${lastError.message}). Trying next candidate...`
+          );
+        }
       }
+    }
+
+    if (isProduction && attempt < maxAttempts) {
+      console.warn(
+        `[PostgreSQL] Connection attempt ${attempt}/${maxAttempts} failed (${lastError?.message || 'unknown'}). Retrying in 2s...`
+      );
+      await sleep(2000);
     }
   }
 
   if (isProduction) {
+    if (lastPgCode === '28P01') {
+      console.error(
+        `[PostgreSQL] HINT (28P01): Authentication failed for ${lastTarget}. If the persistent volume "ibn_baydoah_pgdata" already existed from an earlier deploy with a different password, PostgreSQL ignores POSTGRES_PASSWORD updates on restart. Either match the original password or reset the password inside the postgres container (via local trust socket): ALTER USER "<user>" WITH PASSWORD '<current_POSTGRES_PASSWORD>';`
+      );
+    }
     throw new Error(
       `[PostgreSQL] FATAL: Could not connect to PostgreSQL in production (${lastError?.message || 'unknown error'}). JSON fallback is disabled.`
     );

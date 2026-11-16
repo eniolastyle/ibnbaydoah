@@ -1,8 +1,40 @@
+# Dependencies & Build Outputs
 node_modules/
 build/
 dist/
 coverage/
 .DS_Store
-*.log
-.env*
+
+# Environment & Secret Configs
+.env
+.env.*
 !.env.example
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+*.secret
+secrets/
+rclone.conf
+*.rclone.conf
+
+# Runtime Auth Sessions & Sensitive Backups
+server/data/sessions.json
+ibn-baydoah-backup-*.json
+r2-manifest*.json
+result.json
+
+# Logs & Uploaded Diagnostic Artifacts
+*.log
+npm-debug.log*
+logs/
+*-logs-*.txt
+public/assets/aistudio/
+.aistudio/
+
+# Database Dumps
+*.sql
+*.dump
+*.sqlite
+*.sqlite3
