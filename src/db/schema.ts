@@ -29,6 +29,8 @@ export const books = pgTable('books', {
   description: text('description').default('').notNull(),
   downloadUrl: text('download_url').default('#').notNull(),
   hasPdf: boolean('has_pdf').default(false).notNull(),
+  isPaid: boolean('is_paid').default(false).notNull(),
+  price: text('price').default('').notNull(),
   featured: boolean('featured').default(false).notNull(),
   createdAt: timestamp('created_at').defaultNow().notNull(),
 });

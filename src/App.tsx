@@ -187,13 +187,20 @@ function MainContent() {
                       className="p-7 sm:p-8 rounded-3xl bg-white border border-[#E8DCC9] hover:border-[#0F382C]/40 shadow-[0_2px_12px_-2px_rgba(15,56,44,0.04)] hover:shadow-lg transition-all duration-300 cursor-pointer flex flex-col justify-between group"
                     >
                       <div>
-                        <div className="flex items-center justify-between mb-4">
+                        <div className="flex items-center justify-between gap-2 mb-4">
                           <span className="text-xs font-readex px-3 py-1 rounded-lg bg-[#F4EFE6] text-[#0F382C] font-semibold">
                             {translateCategory(book.category)}
                           </span>
-                          <span className="text-xs font-readex font-bold text-[#8C6D3B]">
-                            {translateStatus(book.status)}
-                          </span>
+                          <div className="flex items-center gap-1.5">
+                            {book.isPaid && (
+                              <span className="text-[11px] font-readex font-bold px-2 py-0.5 rounded bg-[#FAF3E3] text-[#8C5B15] border border-[#C5A880]">
+                                {book.price ? `${t('paid_book')} • ${book.price}` : t('paid_book')}
+                              </span>
+                            )}
+                            <span className="text-xs font-readex font-bold text-[#8C6D3B]">
+                              {translateStatus(book.status)}
+                            </span>
+                          </div>
                         </div>
                         <h3 className="font-amiri font-bold text-2xl text-[#0F382C] mb-3 group-hover:text-[#164E3D] transition">
                           {book.title}

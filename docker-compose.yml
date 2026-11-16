@@ -47,9 +47,6 @@ services:
       R2_SECRET_ACCESS_KEY: ${R2_SECRET_ACCESS_KEY:-}
       R2_PUBLIC_URL: ${R2_PUBLIC_URL:-}
 
-    volumes:
-      - ibn_baydoah_data:/app/server/data
-
     healthcheck:
       test:
         - CMD-SHELL
@@ -62,5 +59,3 @@ services:
 volumes:
   ibn_baydoah_pgdata:
     name: ibn_baydoah_pgdata
-  ibn_baydoah_data:
-    name: ibn_baydoah_data

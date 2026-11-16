@@ -584,6 +584,8 @@ export async function importUniversalBulk(params: {
         description: r.description ? String(r.description) : '',
         downloadUrl: r.downloadUrl ? String(r.downloadUrl) : '#',
         hasPdf: parseBool(r.hasPdf, Boolean(r.downloadUrl && r.downloadUrl !== '#')),
+        isPaid: parseBool(r.isPaid),
+        price: r.price ? String(r.price).trim() : '',
         featured: parseBool(r.featured),
       }));
 

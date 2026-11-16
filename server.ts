@@ -17,7 +17,10 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
-const PORT = Number(process.env.PORT) || 3000;
+const nginxConflict = Boolean(process.env.NGINX_PORT && process.env.PORT === process.env.NGINX_PORT);
+const PORT = nginxConflict
+  ? Number(process.env.DEFAULT_APP_PORT) || 3000
+  : Number(process.env.PORT) || 3000;
 
 app.use(express.json({ limit: '25mb' }));
 
@@ -334,6 +337,8 @@ app.post('/api/books', requireAdmin, async (req, res) => {
       description: req.body.description || '',
       downloadUrl: req.body.downloadUrl || '#',
       hasPdf: Boolean(req.body.hasPdf),
+      isPaid: Boolean(req.body.isPaid),
+      price: req.body.price ? String(req.body.price).trim() : '',
       featured: Boolean(req.body.featured),
     });
     res.json({ success: true, data: newBook });
@@ -773,6 +778,30 @@ app.get('/api/bulk/export', requireAdmin, async (_req, res) => {
   }
 });
 
+app.post('/api/admin/batch', requireAdmin, async (req, res) => {
+  try {
+    const { entity, action, ids, patch } = req.body || {};
+    if (!['books', 'audios', 'poems', 'articles', 'questions'].includes(entity)) {
+      return res.status(400).json({ success: false, message: 'Invalid entity type' });
+    }
+    if (!['delete', 'update'].includes(action)) {
+      return res.status(400).json({ success: false, message: 'Invalid batch action' });
+    }
+    if (!Array.isArray(ids) || ids.length === 0) {
+      return res.status(400).json({ success: false, message: 'No item IDs selected' });
+    }
+
+    const result = await dataStore.batchAction({ entity, action, ids, patch });
+    res.json({ success: true, data: result });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({
+      success: false,
+      message: (err as Error).message || 'Batch action failed',
+    });
+  }
+});
+
 // ==================== RESET, STATS & HEALTH ====================
 
 app.post('/api/reset', requireAdmin, async (_req, res) => {
@@ -793,8 +822,9 @@ app.get('/api/stats', async (_req, res) => {
 app.get('/api/health', (_req, res) => {
   const engine = dataStore.getEngineInfo();
   const r2 = getR2Config();
-  res.json({
-    status: 'ok',
+  const prodMissingPg = process.env.NODE_ENV === 'production' && engine.engine !== 'postgres';
+  res.status(prodMissingPg ? 503 : 200).json({
+    status: prodMissingPg ? 'error' : 'ok',
     storageEngine: engine.engine,
     r2Configured: r2.configured,
     uptime: process.uptime(),

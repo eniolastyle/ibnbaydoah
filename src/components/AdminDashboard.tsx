@@ -44,7 +44,12 @@ import {
   MapPin,
   Star,
   FolderSync,
-  RefreshCw
+  RefreshCw,
+  Copy,
+  RotateCcw,
+  Link2,
+  ShoppingBag,
+  MessageCircle
 } from 'lucide-react';
 
 interface AdminDashboardProps {
@@ -60,7 +65,7 @@ interface AdminDashboardProps {
 }
 
 const DEFAULT_SAMPLE_AUDIO_URL = 'https://cdn.mp3quran.net/audio/mishary-alafasy/r1/001.mp3';
-const ADMIN_PAGE_SIZE = 6;
+const PAGE_SIZE_OPTIONS = [10, 25, 50, 100];
 
 type AdminTab =
   | 'books'
@@ -109,11 +114,28 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [changePassSuccess, setChangePassSuccess] = useState('');
   const [isChangingPass, setIsChangingPass] = useState(false);
 
-  // Active Tab + Search + Pagination + Action Feedback
+  // Active Tab + Search + Filters + Pagination + Multi-Select + Action Feedback
   const [activeTab, setActiveTab] = useState<AdminTab>('books');
   const [tabSearch, setTabSearch] = useState('');
   const [tabPage, setTabPage] = useState(1);
+  const [pageSize, setPageSize] = useState<number>(10);
+  const [filterCategory, setFilterCategory] = useState<string>('all');
+  const [filterStatus, setFilterStatus] = useState<string>('all');
+  const [filterPricing, setFilterPricing] = useState<'all' | 'free' | 'paid'>('all');
+  const [filterLevel, setFilterLevel] = useState<string>('all');
+  const [filterCoverage, setFilterCoverage] = useState<'all' | 'recorded' | 'empty'>('all');
+  const [filterArticleType, setFilterArticleType] = useState<string>('all');
+  const [sortBy, setSortBy] = useState<'default' | 'title' | 'metric'>('default');
   const [questionFilter, setQuestionFilter] = useState<'all' | 'pending' | 'answered'>('all');
+
+  // Multi-select & Bulk Action state
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [bulkCategory, setBulkCategory] = useState<string>('');
+  const [bulkStatus, setBulkStatus] = useState<string>('');
+  const [bulkLevelId, setBulkLevelId] = useState<string>('');
+  const [bulkArticleType, setBulkArticleType] = useState<string>('');
+  const [isApplyingBulk, setIsApplyingBulk] = useState(false);
+
   const [actionBanner, setActionBanner] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
   // Inline Delete Confirmation Modal state
@@ -130,6 +152,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   // Audio CRUD state
   const [editingAudio, setEditingAudio] = useState<Partial<AudioCourse> | null>(null);
   const [isAudioModalOpen, setIsAudioModalOpen] = useState(false);
+  const [showBulkLessonPaster, setShowBulkLessonPaster] = useState(false);
+  const [bulkLessonLines, setBulkLessonLines] = useState('');
 
   // Poem CRUD state
   const [editingPoem, setEditingPoem] = useState<Partial<Poem> | null>(null);
@@ -180,15 +204,27 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     setScheduleForm(scheduleData);
   }, [scheduleData]);
 
-  // Reset search & pagination when switching tabs
+  // Reset search, filters, selection & pagination when switching tabs
   useEffect(() => {
     setTabPage(1);
     setTabSearch('');
+    setFilterCategory('all');
+    setFilterStatus('all');
+    setFilterPricing('all');
+    setFilterLevel('all');
+    setFilterCoverage('all');
+    setFilterArticleType('all');
+    setSortBy('default');
+    setSelectedIds(new Set());
+    setBulkCategory('');
+    setBulkStatus('');
+    setBulkLevelId('');
+    setBulkArticleType('');
   }, [activeTab]);
 
   useEffect(() => {
     setTabPage(1);
-  }, [tabSearch, questionFilter]);
+  }, [tabSearch, questionFilter, filterCategory, filterStatus, filterPricing, filterLevel, filterCoverage, filterArticleType, sortBy, pageSize]);
 
   // Verify auth status and existing token on mount
   useEffect(() => {
@@ -379,6 +415,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       description: '',
       hasPdf: false,
       downloadUrl: '',
+      isPaid: false,
+      price: '',
       featured: false,
       collaborative: false,
       collaborators: ''
@@ -390,8 +428,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     e.preventDefault();
     if (!editingBook || !editingBook.title) return;
 
+    const isPaid = Boolean(editingBook.isPaid);
     const payload = {
       ...editingBook,
+      isPaid,
+      price: isPaid ? (editingBook.price?.trim() || '') : '',
       hasPdf: Boolean(editingBook.hasPdf),
       downloadUrl: editingBook.hasPdf ? (editingBook.downloadUrl?.trim() || '#') : '#',
       featured: Boolean(editingBook.featured),
@@ -435,6 +476,112 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     });
   };
 
+  const toggleBookQuickFlag = async (b: Book, patch: Partial<Book>) => {
+    try {
+      const res = await authFetch(`/api/books/${b.id}`, {
+        method: 'PUT',
+        body: JSON.stringify(patch)
+      });
+      if (res.ok) {
+        onDataRefresh();
+        showBanner('success', lang === 'ar' ? 'تم تحديث حالة المصنف' : 'Treatise updated');
+      }
+    } catch {
+      showBanner('error', lang === 'ar' ? 'تعذر التحديث السريع' : 'Quick update failed');
+    }
+  };
+
+  // ================= MULTI-SELECT & BULK ACTION HANDLERS =================
+  const toggleSelectItem = (id: string) => {
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const toggleSelectPage = (pageItems: Array<{ id: string }>) => {
+    const pageIds = pageItems.map(i => i.id);
+    const allPageSelected = pageIds.length > 0 && pageIds.every(id => selectedIds.has(id));
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      if (allPageSelected) {
+        pageIds.forEach(id => next.delete(id));
+      } else {
+        pageIds.forEach(id => next.add(id));
+      }
+      return next;
+    });
+  };
+
+  const selectAllFiltered = (items: Array<{ id: string }>) => {
+    setSelectedIds(new Set(items.map(i => i.id)));
+  };
+
+  const clearSelection = () => {
+    setSelectedIds(new Set());
+  };
+
+  const executeBatchUpdate = async (
+    entity: 'books' | 'audios' | 'poems' | 'articles',
+    patch: Record<string, unknown>,
+    successMsg: string
+  ) => {
+    if (selectedIds.size === 0) return;
+    setIsApplyingBulk(true);
+    try {
+      const res = await authFetch('/api/admin/batch', {
+        method: 'POST',
+        body: JSON.stringify({
+          entity,
+          action: 'update',
+          ids: Array.from(selectedIds),
+          patch
+        })
+      });
+      const json = await res.json();
+      if (res.ok && json.success) {
+        setSelectedIds(new Set());
+        onDataRefresh();
+        showBanner('success', `${successMsg} (${json.data.affected})`);
+      } else {
+        showBanner('error', json.message || 'Batch update failed');
+      }
+    } catch {
+      showBanner('error', lang === 'ar' ? 'تعذر تنفيذ التحديث الجماعي' : 'Batch update error');
+    } finally {
+      setIsApplyingBulk(false);
+    }
+  };
+
+  const requestBatchDelete = (entity: 'books' | 'audios' | 'poems' | 'articles' | 'questions') => {
+    const count = selectedIds.size;
+    if (count === 0) return;
+    const ids = Array.from(selectedIds);
+    setPendingDelete({
+      label: lang === 'ar'
+        ? `حذف عدد (${count}) من العناصر المحددة نهائياً`
+        : `permanently delete ${count} selected items`,
+      onConfirm: async () => {
+        const res = await authFetch('/api/admin/batch', {
+          method: 'POST',
+          body: JSON.stringify({ entity, action: 'delete', ids })
+        });
+        if (res.ok) {
+          setSelectedIds(new Set());
+          onDataRefresh();
+          showBanner(
+            'success',
+            lang === 'ar' ? `تم حذف ${count} عنصراً بنجاح` : `Deleted ${count} items`
+          );
+        } else {
+          showBanner('error', lang === 'ar' ? 'تعذر الحذف الجماعي' : 'Bulk delete failed');
+        }
+      }
+    });
+  };
+
   // ================= AUDIO & PLAYLIST HANDLERS =================
   const openNewAudio = () => {
     const starterLesson: AudioLesson = {
@@ -457,6 +604,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       audioUrl: starterLesson.audioUrl,
       lessons: [starterLesson]
     });
+    setShowBulkLessonPaster(false);
+    setBulkLessonLines('');
     setIsAudioModalOpen(true);
   };
 
@@ -468,7 +617,71 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       lessons: existingLessons,
       totalLessons: existingLessons.length
     });
+    setShowBulkLessonPaster(false);
+    setBulkLessonLines('');
     setIsAudioModalOpen(true);
+  };
+
+  const toggleAudioQuickStatus = async (course: AudioCourse) => {
+    const nextStatus: AudioCourse['status'] = course.status === 'مكتمل' ? 'درس مستمر' : 'مكتمل';
+    try {
+      const res = await authFetch(`/api/audios/${course.id}`, {
+        method: 'PUT',
+        body: JSON.stringify({ status: nextStatus })
+      });
+      if (res.ok) {
+        onDataRefresh();
+        showBanner('success', lang === 'ar' ? 'تم تحديث حالة الشرح' : 'Course status updated');
+      }
+    } catch {
+      showBanner('error', lang === 'ar' ? 'تعذر التحديث' : 'Status update failed');
+    }
+  };
+
+  const handleBulkAddLessonsFromText = () => {
+    if (!editingAudio || !bulkLessonLines.trim()) return;
+    const currentLessons = [...(editingAudio.lessons || [])];
+    const lines = bulkLessonLines
+      .split('\n')
+      .map(l => l.trim())
+      .filter(Boolean);
+
+    const added: AudioLesson[] = lines.map((line, idx) => {
+      const nextNum = currentLessons.length + idx + 1;
+      if (line.includes('|')) {
+        const parts = line.split('|').map(p => p.trim());
+        if (parts.length >= 3) {
+          return {
+            id: `l-${Date.now()}-${nextNum}`,
+            title: parts[0] || (lang === 'ar' ? `الدرس رقم ${nextNum}` : `Lesson ${nextNum}`),
+            audioUrl: parts[1],
+            duration: parts[2] || '45:00'
+          };
+        }
+        return {
+          id: `l-${Date.now()}-${nextNum}`,
+          title: parts[0] || (lang === 'ar' ? `الدرس رقم ${nextNum}` : `Lesson ${nextNum}`),
+          audioUrl: parts[1] || DEFAULT_SAMPLE_AUDIO_URL,
+          duration: '45:00'
+        };
+      }
+      return {
+        id: `l-${Date.now()}-${nextNum}`,
+        title: lang === 'ar' ? `الدرس رقم ${nextNum}` : `Lesson ${nextNum}`,
+        duration: '45:00',
+        audioUrl: line
+      };
+    });
+
+    const updated = [...currentLessons, ...added];
+    setEditingAudio({
+      ...editingAudio,
+      lessons: updated,
+      totalLessons: updated.length,
+      audioUrl: updated[0]?.audioUrl || editingAudio.audioUrl
+    });
+    setBulkLessonLines('');
+    setShowBulkLessonPaster(false);
   };
 
   const handleSyncSingleCourseR2 = async (course: AudioCourse) => {
@@ -1119,40 +1332,113 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     );
   }
 
-  // ================= FILTERED & PAGINATED DATA =================
+  // ================= FILTERED, SORTED & PAGINATED DATA =================
   const qLower = tabSearch.trim().toLowerCase();
+  const effectivePageSize = pageSize <= 0 ? 999999 : pageSize;
 
-  const filteredBooks = books.filter(b =>
-    !qLower ||
-    b.title.toLowerCase().includes(qLower) ||
-    b.category.toLowerCase().includes(qLower) ||
-    b.status.toLowerCase().includes(qLower)
-  );
-  const paginatedBooks = filteredBooks.slice((tabPage - 1) * ADMIN_PAGE_SIZE, tabPage * ADMIN_PAGE_SIZE);
+  const resetCurrentTabFilters = () => {
+    setTabSearch('');
+    setFilterCategory('all');
+    setFilterStatus('all');
+    setFilterPricing('all');
+    setFilterLevel('all');
+    setFilterCoverage('all');
+    setFilterArticleType('all');
+    setSortBy('default');
+  };
 
-  const filteredAudios = audios.filter(a =>
-    !qLower ||
-    a.title.toLowerCase().includes(qLower) ||
-    a.series.toLowerCase().includes(qLower) ||
-    a.category.toLowerCase().includes(qLower)
-  );
-  const paginatedAudios = filteredAudios.slice((tabPage - 1) * ADMIN_PAGE_SIZE, tabPage * ADMIN_PAGE_SIZE);
+  const hasActiveFilters =
+    Boolean(tabSearch.trim()) ||
+    filterCategory !== 'all' ||
+    filterStatus !== 'all' ||
+    filterPricing !== 'all' ||
+    filterLevel !== 'all' ||
+    filterCoverage !== 'all' ||
+    filterArticleType !== 'all' ||
+    sortBy !== 'default';
 
-  const filteredPoems = poems.filter(p =>
-    !qLower ||
-    p.title.toLowerCase().includes(qLower) ||
-    p.meter.toLowerCase().includes(qLower) ||
-    p.category.toLowerCase().includes(qLower)
-  );
-  const paginatedPoems = filteredPoems.slice((tabPage - 1) * ADMIN_PAGE_SIZE, tabPage * ADMIN_PAGE_SIZE);
+  const filteredBooks = books
+    .filter(b => {
+      const matchesQ =
+        !qLower ||
+        b.title.toLowerCase().includes(qLower) ||
+        (b.subtitle && b.subtitle.toLowerCase().includes(qLower)) ||
+        b.category.toLowerCase().includes(qLower);
+      const matchesCat = filterCategory === 'all' || b.category === filterCategory;
+      const matchesStatus = filterStatus === 'all' || b.status === filterStatus;
+      const matchesPricing =
+        filterPricing === 'all' ||
+        (filterPricing === 'paid' ? Boolean(b.isPaid) : !b.isPaid);
+      return matchesQ && matchesCat && matchesStatus && matchesPricing;
+    })
+    .sort((a, b) => {
+      if (sortBy === 'title') return a.title.localeCompare(b.title);
+      if (sortBy === 'metric') return (b.pages || 0) - (a.pages || 0);
+      return 0;
+    });
+  const paginatedBooks = filteredBooks.slice((tabPage - 1) * effectivePageSize, tabPage * effectivePageSize);
 
-  const filteredArticles = articles.filter(art =>
-    !qLower ||
-    art.title.toLowerCase().includes(qLower) ||
-    art.type.toLowerCase().includes(qLower) ||
-    art.category.toLowerCase().includes(qLower)
-  );
-  const paginatedArticles = filteredArticles.slice((tabPage - 1) * ADMIN_PAGE_SIZE, tabPage * ADMIN_PAGE_SIZE);
+  const filteredAudios = audios
+    .filter(a => {
+      const matchesQ =
+        !qLower ||
+        a.title.toLowerCase().includes(qLower) ||
+        a.series.toLowerCase().includes(qLower) ||
+        a.category.toLowerCase().includes(qLower) ||
+        (a.r2Prefix && a.r2Prefix.toLowerCase().includes(qLower));
+      const matchesCat = filterCategory === 'all' || a.category === filterCategory;
+      const matchesLevel = filterLevel === 'all' || a.levelId === filterLevel;
+      const matchesStatus = filterStatus === 'all' || a.status === filterStatus;
+      const lessonCount = a.lessons?.length || 0;
+      const matchesCoverage =
+        filterCoverage === 'all'
+          ? true
+          : filterCoverage === 'recorded'
+          ? lessonCount > 0
+          : lessonCount === 0;
+      return matchesQ && matchesCat && matchesLevel && matchesStatus && matchesCoverage;
+    })
+    .sort((a, b) => {
+      if (sortBy === 'title') return a.title.localeCompare(b.title);
+      if (sortBy === 'metric') return (b.lessons?.length || 0) - (a.lessons?.length || 0);
+      return 0;
+    });
+  const paginatedAudios = filteredAudios.slice((tabPage - 1) * effectivePageSize, tabPage * effectivePageSize);
+
+  const filteredPoems = poems
+    .filter(p => {
+      const matchesQ =
+        !qLower ||
+        p.title.toLowerCase().includes(qLower) ||
+        p.meter.toLowerCase().includes(qLower) ||
+        p.category.toLowerCase().includes(qLower);
+      const matchesCat = filterCategory === 'all' || p.category === filterCategory;
+      return matchesQ && matchesCat;
+    })
+    .sort((a, b) => {
+      if (sortBy === 'title') return a.title.localeCompare(b.title);
+      if (sortBy === 'metric') return (b.totalVerses || 0) - (a.totalVerses || 0);
+      return 0;
+    });
+  const paginatedPoems = filteredPoems.slice((tabPage - 1) * effectivePageSize, tabPage * effectivePageSize);
+
+  const filteredArticles = articles
+    .filter(art => {
+      const matchesQ =
+        !qLower ||
+        art.title.toLowerCase().includes(qLower) ||
+        art.type.toLowerCase().includes(qLower) ||
+        art.category.toLowerCase().includes(qLower);
+      const matchesCat = filterCategory === 'all' || art.category === filterCategory;
+      const matchesType = filterArticleType === 'all' || art.type === filterArticleType;
+      return matchesQ && matchesCat && matchesType;
+    })
+    .sort((a, b) => {
+      if (sortBy === 'title') return a.title.localeCompare(b.title);
+      if (sortBy === 'metric') return (b.views || 0) - (a.views || 0);
+      return 0;
+    });
+  const paginatedArticles = filteredArticles.slice((tabPage - 1) * effectivePageSize, tabPage * effectivePageSize);
 
   const filteredQuestions = questions.filter(q => {
     const matchesStatus =
@@ -1161,20 +1447,352 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         : questionFilter === 'pending'
         ? !q.answer
         : Boolean(q.answer);
+    const matchesCat = filterCategory === 'all' || q.category === filterCategory;
     const matchesSearch =
       !qLower ||
       q.studentName.toLowerCase().includes(qLower) ||
       q.question.toLowerCase().includes(qLower) ||
       (q.answer && q.answer.toLowerCase().includes(qLower));
-    return matchesStatus && matchesSearch;
+    return matchesStatus && matchesCat && matchesSearch;
   });
-  const paginatedQuestions = filteredQuestions.slice((tabPage - 1) * ADMIN_PAGE_SIZE, tabPage * ADMIN_PAGE_SIZE);
+  const paginatedQuestions = filteredQuestions.slice((tabPage - 1) * effectivePageSize, tabPage * effectivePageSize);
 
   const pendingQuestionsCount = questions.filter(q => !q.answer).length;
   const totalLessonsAcrossAudios = audios.reduce((sum, a) => sum + (a.lessons?.length || 0), 0);
+  const emptyAudioCoursesCount = audios.filter(a => (a.lessons?.length || 0) === 0).length;
+
+  const renderPageSizeControl = () => (
+    <label className="inline-flex items-center gap-1.5 px-2.5 py-2 rounded-xl border border-[#E0D4C1] bg-white text-xs font-readex text-[#0F382C] shrink-0">
+      <span className="text-[11px] text-[#8C6D3B]">{lang === 'ar' ? 'عرض:' : 'Show:'}</span>
+      <select
+        value={pageSize}
+        onChange={e => setPageSize(Number(e.target.value))}
+        className="bg-transparent font-latin font-bold text-xs text-[#0F382C] focus:outline-none cursor-pointer"
+      >
+        {PAGE_SIZE_OPTIONS.map(opt => (
+          <option key={opt} value={opt}>{opt}</option>
+        ))}
+        <option value={999999}>{lang === 'ar' ? 'الكل' : 'All'}</option>
+      </select>
+    </label>
+  );
+
+  const renderSelectAllBanner = (pageItems: Array<{ id: string }>, allFilteredItems: Array<{ id: string }>) => {
+    const pageIds = pageItems.map(i => i.id);
+    const allPageSelected = pageIds.length > 0 && pageIds.every(id => selectedIds.has(id));
+    if (selectedIds.size === 0) return null;
+
+    return (
+      <div className="p-3.5 rounded-2xl bg-[#0F382C] text-[#FDFBF7] border border-[#C5A880]/40 shadow-sm space-y-3 font-readex text-xs">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="px-2.5 py-1 rounded-lg bg-[#C5A880] text-[#0F382C] font-bold">
+              {lang === 'ar' ? `تم تحديد ${selectedIds.size} عنصر` : `${selectedIds.size} selected`}
+            </span>
+
+            {allPageSelected && allFilteredItems.length > pageItems.length && selectedIds.size < allFilteredItems.length && (
+              <button
+                type="button"
+                onClick={() => selectAllFiltered(allFilteredItems)}
+                className="underline text-[#DFC7A5] hover:text-white font-semibold"
+              >
+                {lang === 'ar'
+                  ? `تحديد جميع النتائج (${allFilteredItems.length}) عبر كل الصفحات`
+                  : `Select all ${allFilteredItems.length} matching items across all pages`}
+              </button>
+            )}
+
+            <button
+              type="button"
+              onClick={clearSelection}
+              className="px-2.5 py-1 rounded-lg bg-white/10 hover:bg-white/20 text-[#DFC7A5] transition"
+            >
+              {lang === 'ar' ? 'إلغاء التحديد' : 'Clear'}
+            </button>
+          </div>
+
+          <button
+            type="button"
+            disabled={isApplyingBulk}
+            onClick={() =>
+              requestBatchDelete(activeTab as 'books' | 'audios' | 'poems' | 'articles' | 'questions')
+            }
+            className="px-3.5 py-1.5 rounded-xl bg-red-600 hover:bg-red-700 text-white font-bold flex items-center gap-1.5 disabled:opacity-50"
+          >
+            <Trash2 className="w-3.5 h-3.5" />
+            <span>{lang === 'ar' ? `حذف المحدد (${selectedIds.size})` : `Delete Selected (${selectedIds.size})`}</span>
+          </button>
+        </div>
+
+        {/* Entity-specific quick batch edits */}
+        {activeTab === 'books' && (
+          <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-white/15">
+            <select
+              value={bulkStatus}
+              onChange={e => setBulkStatus(e.target.value)}
+              className="px-2.5 py-1.5 rounded-lg bg-white text-[#0F382C] text-xs font-semibold"
+            >
+              <option value="">{lang === 'ar' ? '-- تغيير الحالة --' : '-- Set Status --'}</option>
+              <option value="مطبوع">{translateStatus('مطبوع')}</option>
+              <option value="مخطوط">{translateStatus('مخطوط')}</option>
+            </select>
+            {bulkStatus && (
+              <button
+                type="button"
+                disabled={isApplyingBulk}
+                onClick={() => {
+                  executeBatchUpdate('books', { status: bulkStatus }, lang === 'ar' ? 'تم تحديث الحالة' : 'Status updated');
+                  setBulkStatus('');
+                }}
+                className="px-3 py-1.5 rounded-lg bg-[#C5A880] text-[#0F382C] font-bold"
+              >
+                {lang === 'ar' ? 'تطبيق' : 'Apply'}
+              </button>
+            )}
+
+            <select
+              value={bulkCategory}
+              onChange={e => setBulkCategory(e.target.value)}
+              className="px-2.5 py-1.5 rounded-lg bg-white text-[#0F382C] text-xs font-semibold"
+            >
+              <option value="">{lang === 'ar' ? '-- تغيير الفن --' : '-- Set Discipline --'}</option>
+              {categories.map(c => (
+                <option key={c} value={c}>{translateCategory(c)}</option>
+              ))}
+            </select>
+            {bulkCategory && (
+              <button
+                type="button"
+                disabled={isApplyingBulk}
+                onClick={() => {
+                  executeBatchUpdate('books', { category: bulkCategory }, lang === 'ar' ? 'تم تحديث الفن العلمي' : 'Discipline updated');
+                  setBulkCategory('');
+                }}
+                className="px-3 py-1.5 rounded-lg bg-[#C5A880] text-[#0F382C] font-bold"
+              >
+                {lang === 'ar' ? 'تطبيق' : 'Apply'}
+              </button>
+            )}
+
+            <button
+              type="button"
+              disabled={isApplyingBulk}
+              onClick={() => executeBatchUpdate('books', { featured: true }, lang === 'ar' ? 'تم تمييز الكتب المحددة' : 'Marked as featured')}
+              className="px-2.5 py-1.5 rounded-lg bg-white/15 hover:bg-white/25 text-amber-200 font-semibold flex items-center gap-1"
+            >
+              <Star className="w-3 h-3" />
+              <span>{lang === 'ar' ? 'إبراز' : 'Feature'}</span>
+            </button>
+            <button
+              type="button"
+              disabled={isApplyingBulk}
+              onClick={() => executeBatchUpdate('books', { featured: false }, lang === 'ar' ? 'تم إلغاء الإبراز' : 'Unfeatured')}
+              className="px-2.5 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-white/80 font-semibold"
+            >
+              {lang === 'ar' ? 'إلغاء الإبراز' : 'Unfeature'}
+            </button>
+
+            <button
+              type="button"
+              disabled={isApplyingBulk}
+              onClick={() => executeBatchUpdate('books', { isPaid: true }, lang === 'ar' ? 'تم تعيين الكتب المحددة كمدفوعة (طلب عبر واتساب)' : 'Marked as Paid (Order via WhatsApp)')}
+              className="px-2.5 py-1.5 rounded-lg bg-[#C5A880] hover:bg-[#DFC7A5] text-[#0F382C] font-bold flex items-center gap-1"
+            >
+              <ShoppingBag className="w-3 h-3" />
+              <span>{lang === 'ar' ? 'تعيين كمدفوع' : 'Mark Paid'}</span>
+            </button>
+            <button
+              type="button"
+              disabled={isApplyingBulk}
+              onClick={() => executeBatchUpdate('books', { isPaid: false, price: '' }, lang === 'ar' ? 'تم تعيين الكتب المحددة كمجانية' : 'Marked as Free')}
+              className="px-2.5 py-1.5 rounded-lg bg-emerald-600/80 hover:bg-emerald-600 text-white font-semibold"
+            >
+              {lang === 'ar' ? 'تعيين كمجاني' : 'Mark Free'}
+            </button>
+          </div>
+        )}
+
+        {activeTab === 'audios' && (
+          <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-white/15">
+            <select
+              value={bulkStatus}
+              onChange={e => setBulkStatus(e.target.value)}
+              className="px-2.5 py-1.5 rounded-lg bg-white text-[#0F382C] text-xs font-semibold"
+            >
+              <option value="">{lang === 'ar' ? '-- تغيير الحالة --' : '-- Set Status --'}</option>
+              <option value="درس مستمر">{lang === 'ar' ? 'درس مستمر' : 'Ongoing'}</option>
+              <option value="مكتمل">{lang === 'ar' ? 'مكتمل' : 'Completed'}</option>
+            </select>
+            {bulkStatus && (
+              <button
+                type="button"
+                disabled={isApplyingBulk}
+                onClick={() => {
+                  executeBatchUpdate('audios', { status: bulkStatus }, lang === 'ar' ? 'تم تحديث حالة السلاسل' : 'Course status updated');
+                  setBulkStatus('');
+                }}
+                className="px-3 py-1.5 rounded-lg bg-[#C5A880] text-[#0F382C] font-bold"
+              >
+                {lang === 'ar' ? 'تطبيق' : 'Apply'}
+              </button>
+            )}
+
+            <select
+              value={bulkLevelId}
+              onChange={e => setBulkLevelId(e.target.value)}
+              className="px-2.5 py-1.5 rounded-lg bg-white text-[#0F382C] text-xs font-semibold"
+            >
+              <option value="">{lang === 'ar' ? '-- تغيير المستوى --' : '-- Set Level --'}</option>
+              <option value="beginner">{t('beginner')}</option>
+              <option value="intermediate">{t('intermediate')}</option>
+              <option value="advanced">{t('advanced')}</option>
+            </select>
+            {bulkLevelId && (
+              <button
+                type="button"
+                disabled={isApplyingBulk}
+                onClick={() => {
+                  const lvl = bulkLevelId === 'beginner' ? 'مبتدئ' : bulkLevelId === 'intermediate' ? 'متوسط' : 'متقدم / مفصل';
+                  executeBatchUpdate('audios', { levelId: bulkLevelId, level: lvl }, lang === 'ar' ? 'تم تحديث المستوى' : 'Level updated');
+                  setBulkLevelId('');
+                }}
+                className="px-3 py-1.5 rounded-lg bg-[#C5A880] text-[#0F382C] font-bold"
+              >
+                {lang === 'ar' ? 'تطبيق' : 'Apply'}
+              </button>
+            )}
+
+            <select
+              value={bulkCategory}
+              onChange={e => setBulkCategory(e.target.value)}
+              className="px-2.5 py-1.5 rounded-lg bg-white text-[#0F382C] text-xs font-semibold"
+            >
+              <option value="">{lang === 'ar' ? '-- تغيير الفن --' : '-- Set Discipline --'}</option>
+              {categories.map(c => (
+                <option key={c} value={c}>{translateCategory(c)}</option>
+              ))}
+            </select>
+            {bulkCategory && (
+              <button
+                type="button"
+                disabled={isApplyingBulk}
+                onClick={() => {
+                  executeBatchUpdate('audios', { category: bulkCategory }, lang === 'ar' ? 'تم تحديث الفن العلمي' : 'Discipline updated');
+                  setBulkCategory('');
+                }}
+                className="px-3 py-1.5 rounded-lg bg-[#C5A880] text-[#0F382C] font-bold"
+              >
+                {lang === 'ar' ? 'تطبيق' : 'Apply'}
+              </button>
+            )}
+          </div>
+        )}
+
+        {activeTab === 'poetry' && (
+          <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-white/15">
+            <select
+              value={bulkCategory}
+              onChange={e => setBulkCategory(e.target.value)}
+              className="px-2.5 py-1.5 rounded-lg bg-white text-[#0F382C] text-xs font-semibold"
+            >
+              <option value="">{lang === 'ar' ? '-- تغيير الفن / التصنيف --' : '-- Set Category --'}</option>
+              {categories.map(c => (
+                <option key={c} value={c}>{translateCategory(c)}</option>
+              ))}
+            </select>
+            {bulkCategory && (
+              <button
+                type="button"
+                disabled={isApplyingBulk}
+                onClick={() => {
+                  executeBatchUpdate('poems', { category: bulkCategory }, lang === 'ar' ? 'تم تحديث تصنيف المنظومات' : 'Category updated');
+                  setBulkCategory('');
+                }}
+                className="px-3 py-1.5 rounded-lg bg-[#C5A880] text-[#0F382C] font-bold"
+              >
+                {lang === 'ar' ? 'تطبيق' : 'Apply'}
+              </button>
+            )}
+          </div>
+        )}
+
+        {activeTab === 'articles' && (
+          <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-white/15">
+            <select
+              value={bulkArticleType}
+              onChange={e => setBulkArticleType(e.target.value)}
+              className="px-2.5 py-1.5 rounded-lg bg-white text-[#0F382C] text-xs font-semibold"
+            >
+              <option value="">{lang === 'ar' ? '-- تغيير النوع --' : '-- Set Type --'}</option>
+              <option value="خواطر ابن بيضاء">{translateArticleType('خواطر ابن بيضاء')}</option>
+              <option value="بحث أكاديمي">{translateArticleType('بحث أكاديمي')}</option>
+              <option value="مقال عقدي">{translateArticleType('مقال عقدي')}</option>
+              <option value="مقال لغوي">{lang === 'ar' ? 'مقال لغوي' : 'Linguistic Article'}</option>
+            </select>
+            {bulkArticleType && (
+              <button
+                type="button"
+                disabled={isApplyingBulk}
+                onClick={() => {
+                  executeBatchUpdate('articles', { type: bulkArticleType }, lang === 'ar' ? 'تم تحديث النوع' : 'Type updated');
+                  setBulkArticleType('');
+                }}
+                className="px-3 py-1.5 rounded-lg bg-[#C5A880] text-[#0F382C] font-bold"
+              >
+                {lang === 'ar' ? 'تطبيق' : 'Apply'}
+              </button>
+            )}
+
+            <select
+              value={bulkCategory}
+              onChange={e => setBulkCategory(e.target.value)}
+              className="px-2.5 py-1.5 rounded-lg bg-white text-[#0F382C] text-xs font-semibold"
+            >
+              <option value="">{lang === 'ar' ? '-- تغيير الفن --' : '-- Set Discipline --'}</option>
+              {categories.map(c => (
+                <option key={c} value={c}>{translateCategory(c)}</option>
+              ))}
+            </select>
+            {bulkCategory && (
+              <button
+                type="button"
+                disabled={isApplyingBulk}
+                onClick={() => {
+                  executeBatchUpdate('articles', { category: bulkCategory }, lang === 'ar' ? 'تم تحديث الفن' : 'Discipline updated');
+                  setBulkCategory('');
+                }}
+                className="px-3 py-1.5 rounded-lg bg-[#C5A880] text-[#0F382C] font-bold"
+              >
+                {lang === 'ar' ? 'تطبيق' : 'Apply'}
+              </button>
+            )}
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  const renderSelectHeaderCheckbox = (pageItems: Array<{ id: string }>) => {
+    const pageIds = pageItems.map(i => i.id);
+    const selectedCountOnPage = pageIds.filter(id => selectedIds.has(id)).length;
+    const allSelected = pageIds.length > 0 && selectedCountOnPage === pageIds.length;
+    const someSelected = selectedCountOnPage > 0 && !allSelected;
+    return (
+      <input
+        type="checkbox"
+        aria-label={lang === 'ar' ? 'تحديد الكل في هذه الصفحة' : 'Select all on page'}
+        checked={allSelected}
+        ref={el => {
+          if (el) el.indeterminate = someSelected;
+        }}
+        onChange={() => toggleSelectPage(pageItems)}
+        className="w-4 h-4 rounded border-[#C5A880] text-[#0F382C] cursor-pointer accent-[#0F382C]"
+      />
+    );
+  };
 
   return (
-    <div className="space-y-8 max-w-6xl mx-auto">
+    <div className="space-y-7 max-w-6xl mx-auto">
       {/* Top Admin Header */}
       <div className="bg-[#0F382C] text-[#FDFBF7] rounded-3xl p-6 sm:p-8 flex flex-col md:flex-row md:items-center justify-between gap-4 shadow-md border border-[#0F382C]">
         <div>
@@ -1186,8 +1804,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           </div>
           <p className="text-xs text-[#DFC7A5]/85 font-readex">
             {lang === 'ar'
-              ? 'إدارة شاملة لجميع أقسام المنصة: المكتبة، الشروح ودروسها، المنظومات، الخواطر، الحلقات، والملف الشخصي'
-              : 'Full CMS control over Library, Audio Playlists, Diwan, Reflections, Schedule & Virtual Academy, Inquiries & Profile'}
+              ? 'إدارة متقدمة بالفرز والتحديد المتعدد على المكتبة، الشروح ودروسها، المنظومات، الخواطر، الحلقات، والملف الشخصي'
+              : 'Full CMS with multi-select bulk actions, per-page controls, and filtering across Library, Audio Playlists, Diwan, Reflections & Schedule'}
           </p>
         </div>
 
@@ -1204,7 +1822,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 font-readex">
         <button
           onClick={() => setActiveTab('books')}
-          className="p-3.5 rounded-2xl bg-white border border-[#EADFCB] hover:border-[#0F382C]/40 text-start transition shadow-2xs"
+          className={`p-3.5 rounded-2xl bg-white border text-start transition shadow-2xs ${activeTab === 'books' ? 'border-[#0F382C] ring-1 ring-[#0F382C]/20' : 'border-[#EADFCB] hover:border-[#0F382C]/40'}`}
         >
           <span className="text-[11px] text-[#8C6D3B] font-semibold block">{lang === 'ar' ? 'المؤلفات' : 'Books'}</span>
           <span className="font-amiri font-bold text-2xl text-[#0F382C]">{books.length}</span>
@@ -1212,7 +1830,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
         <button
           onClick={() => setActiveTab('audios')}
-          className="p-3.5 rounded-2xl bg-white border border-[#EADFCB] hover:border-[#0F382C]/40 text-start transition shadow-2xs"
+          className={`p-3.5 rounded-2xl bg-white border text-start transition shadow-2xs ${activeTab === 'audios' ? 'border-[#0F382C] ring-1 ring-[#0F382C]/20' : 'border-[#EADFCB] hover:border-[#0F382C]/40'}`}
         >
           <span className="text-[11px] text-[#8C6D3B] font-semibold block">
             {lang === 'ar' ? 'السلاسل / الدروس' : 'Courses / Lessons'}
@@ -1220,11 +1838,16 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           <span className="font-amiri font-bold text-2xl text-[#0F382C]">
             {audios.length} <span className="text-sm font-readex text-[#A58455]">({totalLessonsAcrossAudios})</span>
           </span>
+          {emptyAudioCoursesCount > 0 && (
+            <span className="block text-[10px] text-amber-700 font-medium mt-0.5">
+              {emptyAudioCoursesCount} {lang === 'ar' ? 'بانتظار الرفع' : 'pending upload'}
+            </span>
+          )}
         </button>
 
         <button
           onClick={() => setActiveTab('poetry')}
-          className="p-3.5 rounded-2xl bg-white border border-[#EADFCB] hover:border-[#0F382C]/40 text-start transition shadow-2xs"
+          className={`p-3.5 rounded-2xl bg-white border text-start transition shadow-2xs ${activeTab === 'poetry' ? 'border-[#0F382C] ring-1 ring-[#0F382C]/20' : 'border-[#EADFCB] hover:border-[#0F382C]/40'}`}
         >
           <span className="text-[11px] text-[#8C6D3B] font-semibold block">{lang === 'ar' ? 'المنظومات' : 'Poems'}</span>
           <span className="font-amiri font-bold text-2xl text-[#0F382C]">{poems.length}</span>
@@ -1232,7 +1855,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
         <button
           onClick={() => setActiveTab('articles')}
-          className="p-3.5 rounded-2xl bg-white border border-[#EADFCB] hover:border-[#0F382C]/40 text-start transition shadow-2xs"
+          className={`p-3.5 rounded-2xl bg-white border text-start transition shadow-2xs ${activeTab === 'articles' ? 'border-[#0F382C] ring-1 ring-[#0F382C]/20' : 'border-[#EADFCB] hover:border-[#0F382C]/40'}`}
         >
           <span className="text-[11px] text-[#8C6D3B] font-semibold block">{lang === 'ar' ? 'الخواطر والمقالات' : 'Articles'}</span>
           <span className="font-amiri font-bold text-2xl text-[#0F382C]">{articles.length}</span>
@@ -1240,7 +1863,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
         <button
           onClick={() => setActiveTab('schedule')}
-          className="p-3.5 rounded-2xl bg-white border border-[#EADFCB] hover:border-[#0F382C]/40 text-start transition shadow-2xs"
+          className={`p-3.5 rounded-2xl bg-white border text-start transition shadow-2xs ${activeTab === 'schedule' ? 'border-[#0F382C] ring-1 ring-[#0F382C]/20' : 'border-[#EADFCB] hover:border-[#0F382C]/40'}`}
         >
           <span className="text-[11px] text-[#8C6D3B] font-semibold block">{lang === 'ar' ? 'الحلقات والإعلانات' : 'Circles & News'}</span>
           <span className="font-amiri font-bold text-2xl text-[#0F382C]">
@@ -1250,7 +1873,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
         <button
           onClick={() => setActiveTab('questions')}
-          className="p-3.5 rounded-2xl bg-white border border-[#EADFCB] hover:border-[#0F382C]/40 text-start transition shadow-2xs"
+          className={`p-3.5 rounded-2xl bg-white border text-start transition shadow-2xs ${activeTab === 'questions' ? 'border-[#0F382C] ring-1 ring-[#0F382C]/20' : 'border-[#EADFCB] hover:border-[#0F382C]/40'}`}
         >
           <span className="text-[11px] text-[#8C6D3B] font-semibold block">{lang === 'ar' ? 'الأسئلة المعلقة' : 'Pending Q&A'}</span>
           <span className="font-amiri font-bold text-2xl text-[#0F382C]">
@@ -1396,35 +2019,95 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       {/* ================= 1. BOOKS MANAGEMENT TAB ================= */}
       {activeTab === 'books' && (
         <div className="space-y-4">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
             <h3 className="font-amiri font-bold text-xl text-[#0F382C]">
               {lang === 'ar' ? 'إدارة المؤلفات والكتب' : 'Manage Books & Treatises'}
             </h3>
-            <div className="flex flex-wrap items-center gap-2.5">
-              <div className="relative flex-1 sm:w-64">
+            <div className="flex flex-wrap items-center gap-2 font-readex text-xs">
+              <div className="relative flex-1 min-w-[180px] sm:w-52">
                 <input
                   type="text"
                   value={tabSearch}
                   onChange={e => setTabSearch(e.target.value)}
                   placeholder={lang === 'ar' ? 'بحث في الكتب...' : 'Search books...'}
-                  className="w-full pl-9 pr-3 py-2 rounded-xl border border-[#E0D4C1] bg-white text-xs font-readex"
+                  className="w-full pl-9 pr-3 py-2 rounded-xl border border-[#E0D4C1] bg-white text-xs"
                 />
                 <Search className="w-3.5 h-3.5 text-[#A58455] absolute left-3 top-1/2 -translate-y-1/2" />
               </div>
+
+              <select
+                value={filterCategory}
+                onChange={e => setFilterCategory(e.target.value)}
+                className="px-3 py-2 rounded-xl border border-[#E0D4C1] bg-white text-xs text-[#0F382C]"
+              >
+                <option value="all">{lang === 'ar' ? 'كل الفنون' : 'All Disciplines'}</option>
+                {categories.map(c => (
+                  <option key={c} value={c}>{translateCategory(c)}</option>
+                ))}
+              </select>
+
+              <select
+                value={filterStatus}
+                onChange={e => setFilterStatus(e.target.value)}
+                className="px-3 py-2 rounded-xl border border-[#E0D4C1] bg-white text-xs text-[#0F382C]"
+              >
+                <option value="all">{lang === 'ar' ? 'كل الحالات' : 'All Statuses'}</option>
+                <option value="مطبوع">{translateStatus('مطبوع')}</option>
+                <option value="مخطوط">{translateStatus('مخطوط')}</option>
+              </select>
+
+              <select
+                value={filterPricing}
+                onChange={e => setFilterPricing(e.target.value as 'all' | 'free' | 'paid')}
+                className="px-3 py-2 rounded-xl border border-[#E0D4C1] bg-white text-xs text-[#0F382C]"
+              >
+                <option value="all">{t('all_pricing')}</option>
+                <option value="free">{t('free_book')}</option>
+                <option value="paid">{t('paid_book')}</option>
+              </select>
+
+              <select
+                value={sortBy}
+                onChange={e => setSortBy(e.target.value as any)}
+                className="px-3 py-2 rounded-xl border border-[#E0D4C1] bg-white text-xs text-[#0F382C]"
+              >
+                <option value="default">{lang === 'ar' ? 'الترتيب الافتراضي' : 'Default Order'}</option>
+                <option value="title">{lang === 'ar' ? 'حسب العنوان' : 'Title A-Z'}</option>
+                <option value="metric">{lang === 'ar' ? 'الأكثر صفحات' : 'Pages High-Low'}</option>
+              </select>
+
+              {renderPageSizeControl()}
+
+              {hasActiveFilters && (
+                <button
+                  type="button"
+                  onClick={resetCurrentTabFilters}
+                  className="px-2.5 py-2 rounded-xl bg-[#F4EFE6] text-[#8C6D3B] hover:text-[#0F382C] flex items-center gap-1"
+                  title={lang === 'ar' ? 'إعادة ضبط الفلاتر' : 'Reset filters'}
+                >
+                  <RotateCcw className="w-3.5 h-3.5" />
+                </button>
+              )}
+
               <button
                 onClick={openNewBook}
-                className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-[#0F382C] text-white text-xs font-readex font-bold hover:bg-[#164E3D] shadow-xs"
+                className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-[#0F382C] text-white text-xs font-bold hover:bg-[#164E3D] shadow-xs"
               >
                 <Plus className="w-4 h-4 text-[#DFC7A5]" />
-                <span>{lang === 'ar' ? 'إضافة مؤلف جديد' : 'Add Treatise'}</span>
+                <span>{lang === 'ar' ? 'إضافة مؤلف' : 'Add Treatise'}</span>
               </button>
             </div>
           </div>
+
+          {renderSelectAllBanner(paginatedBooks, filteredBooks)}
 
           <div className="bg-white rounded-2xl border border-[#EADFCB] overflow-x-auto shadow-xs">
             <table className="w-full text-right text-xs font-readex rtl:text-right ltr:text-left">
               <thead className="bg-[#F6F1E7] border-b border-[#EADFCB] text-[#0F382C]">
                 <tr>
+                  <th className="p-3.5 w-10 text-center">
+                    {renderSelectHeaderCheckbox(paginatedBooks)}
+                  </th>
                   <th className="p-3.5 font-bold">{lang === 'ar' ? 'عنوان المصنف' : 'Treatise Title'}</th>
                   <th className="p-3.5 font-bold">{lang === 'ar' ? 'الفن العلمي' : 'Discipline'}</th>
                   <th className="p-3.5 font-bold">{lang === 'ar' ? 'الحالة' : 'Status'}</th>
@@ -1434,68 +2117,132 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 </tr>
               </thead>
               <tbody className="divide-y divide-[#EADFCB]/60">
-                {paginatedBooks.map(b => (
-                  <tr key={b.id} className="hover:bg-[#FDFBF7]">
-                    <td className="p-3.5">
-                      <div className="font-amiri font-bold text-base text-[#0F382C]">{b.title}</div>
-                      {b.subtitle && <div className="text-[11px] text-[#8C6D3B]">{b.subtitle}</div>}
-                    </td>
-                    <td className="p-3.5">{translateCategory(b.category)}</td>
-                    <td className="p-3.5">
-                      <span
-                        className={`px-2 py-0.5 rounded font-bold ${
-                          b.status === 'مطبوع'
-                            ? 'bg-emerald-100 text-emerald-800'
-                            : 'bg-amber-100 text-amber-800'
-                        }`}
-                      >
-                        {translateStatus(b.status)}
-                      </span>
-                    </td>
-                    <td className="p-3.5">
-                      <div className="flex flex-wrap gap-1">
-                        {b.featured && (
-                          <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded bg-amber-100 text-amber-900 text-[10px] font-bold">
-                            <Star className="w-2.5 h-2.5" />
-                            {lang === 'ar' ? 'مميز' : 'Featured'}
-                          </span>
-                        )}
-                        {b.hasPdf && (
-                          <span className="px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-800 border border-emerald-200 text-[10px] font-bold">
-                            PDF
-                          </span>
-                        )}
-                        {b.collaborative && (
-                          <span className="px-1.5 py-0.5 rounded bg-[#F4EFE6] text-[#0F382C] text-[10px] font-bold">
-                            {lang === 'ar' ? 'مشترك' : 'Co-op'}
-                          </span>
-                        )}
-                      </div>
-                    </td>
-                    <td className="p-3.5">{b.pages}</td>
-                    <td className="p-3.5 text-center">
-                      <div className="flex items-center justify-center gap-2">
-                        <button
-                          onClick={() => {
-                            setEditingBook(b);
-                            setIsBookModalOpen(true);
-                          }}
-                          className="p-1.5 rounded text-[#0F382C] hover:bg-[#F4EFE6]"
-                          title={t('edit')}
-                        >
-                          <Edit className="w-4 h-4" />
-                        </button>
-                        <button
-                          onClick={() => requestDeleteBook(b)}
-                          className="p-1.5 rounded text-red-600 hover:bg-red-50"
-                          title={t('delete')}
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
-                      </div>
+                {paginatedBooks.length === 0 ? (
+                  <tr>
+                    <td colSpan={7} className="p-8 text-center text-[#8C6D3B]">
+                      {lang === 'ar' ? 'لا توجد مؤلفات مطابقة للبحث' : 'No matching treatises found'}
                     </td>
                   </tr>
-                ))}
+                ) : (
+                  paginatedBooks.map(b => {
+                    const isChecked = selectedIds.has(b.id);
+                    return (
+                      <tr key={b.id} className={`transition ${isChecked ? 'bg-[#FAF5EB]' : 'hover:bg-[#FDFBF7]'}`}>
+                        <td className="p-3.5 text-center">
+                          <input
+                            type="checkbox"
+                            checked={isChecked}
+                            onChange={() => toggleSelectItem(b.id)}
+                            className="w-4 h-4 rounded border-[#C5A880] accent-[#0F382C] cursor-pointer"
+                          />
+                        </td>
+                        <td className="p-3.5">
+                          <div className="font-amiri font-bold text-base text-[#0F382C]">{b.title}</div>
+                          {b.subtitle && <div className="text-[11px] text-[#8C6D3B]">{b.subtitle}</div>}
+                        </td>
+                        <td className="p-3.5">{translateCategory(b.category)}</td>
+                        <td className="p-3.5">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              toggleBookQuickFlag(b, { status: b.status === 'مطبوع' ? 'مخطوط' : 'مطبوع' })
+                            }
+                            title={lang === 'ar' ? 'انقر للتبديل السريع بين مطبوع ومخطوط' : 'Click to toggle status'}
+                            className={`px-2.5 py-0.5 rounded font-bold transition hover:opacity-80 ${
+                              b.status === 'مطبوع'
+                                ? 'bg-emerald-100 text-emerald-800'
+                                : 'bg-amber-100 text-amber-800'
+                            }`}
+                          >
+                            {translateStatus(b.status)}
+                          </button>
+                        </td>
+                        <td className="p-3.5">
+                          <div className="flex flex-wrap items-center gap-1">
+                            <button
+                              type="button"
+                              onClick={() => toggleBookQuickFlag(b, { isPaid: !b.isPaid })}
+                              title={lang === 'ar' ? 'انقر للتبديل بين مجاني ومدفوع (طلب عبر واتساب)' : 'Click to toggle Free / Paid'}
+                              className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold border transition ${
+                                b.isPaid
+                                  ? 'bg-[#FAF3E3] text-[#8C5B15] border-[#C5A880] hover:bg-[#F3E6C8]'
+                                  : 'bg-emerald-50 text-emerald-800 border-emerald-200 hover:bg-emerald-100'
+                              }`}
+                            >
+                              {b.isPaid ? (
+                                <>
+                                  <ShoppingBag className="w-2.5 h-2.5" />
+                                  <span>{b.price ? `${t('paid_book')} • ${b.price}` : t('paid_book')}</span>
+                                </>
+                              ) : (
+                                <span>{t('free_book')}</span>
+                              )}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => toggleBookQuickFlag(b, { featured: !b.featured })}
+                              title={lang === 'ar' ? 'تبديل الإبراز في الرئيسية' : 'Toggle Featured'}
+                              className={`inline-flex items-center gap-0.5 px-2 py-0.5 rounded text-[10px] font-bold transition ${
+                                b.featured
+                                  ? 'bg-amber-100 text-amber-900'
+                                  : 'bg-gray-100 text-gray-500 hover:bg-amber-50 hover:text-amber-700'
+                              }`}
+                            >
+                              <Star className={`w-2.5 h-2.5 ${b.featured ? 'fill-amber-600' : ''}`} />
+                              {lang === 'ar' ? (b.featured ? 'مميز' : 'عادي') : (b.featured ? 'Featured' : 'Normal')}
+                            </button>
+                            {!b.isPaid && b.hasPdf && (
+                              <span className="px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-800 border border-emerald-200 text-[10px] font-bold">
+                                PDF
+                              </span>
+                            )}
+                            {b.collaborative && (
+                              <span className="px-1.5 py-0.5 rounded bg-[#F4EFE6] text-[#0F382C] text-[10px] font-bold">
+                                {lang === 'ar' ? 'مشترك' : 'Co-op'}
+                              </span>
+                            )}
+                          </div>
+                        </td>
+                        <td className="p-3.5 font-latin">{b.pages}</td>
+                        <td className="p-3.5 text-center">
+                          <div className="flex items-center justify-center gap-1">
+                            <button
+                              onClick={() => {
+                                setEditingBook(b);
+                                setIsBookModalOpen(true);
+                              }}
+                              className="p-1.5 rounded text-[#0F382C] hover:bg-[#F4EFE6]"
+                              title={t('edit')}
+                            >
+                              <Edit className="w-4 h-4" />
+                            </button>
+                            <button
+                              onClick={() => {
+                                const { id: _ignore, ...copy } = b;
+                                setEditingBook({
+                                  ...copy,
+                                  title: `${b.title} (${lang === 'ar' ? 'نسخة' : 'Copy'})`
+                                });
+                                setIsBookModalOpen(true);
+                              }}
+                              className="p-1.5 rounded text-[#8C6D3B] hover:bg-[#F4EFE6]"
+                              title={lang === 'ar' ? 'نسخ كجديد' : 'Duplicate'}
+                            >
+                              <Copy className="w-3.5 h-3.5" />
+                            </button>
+                            <button
+                              onClick={() => requestDeleteBook(b)}
+                              className="p-1.5 rounded text-red-600 hover:bg-red-50"
+                              title={t('delete')}
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })
+                )}
               </tbody>
             </table>
           </div>
@@ -1503,7 +2250,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           <Pagination
             currentPage={tabPage}
             totalItems={filteredBooks.length}
-            pageSize={ADMIN_PAGE_SIZE}
+            pageSize={pageSize}
+            pageSizeOptions={PAGE_SIZE_OPTIONS}
+            onPageSizeChange={setPageSize}
             onPageChange={setTabPage}
           />
         </div>
@@ -1512,103 +2261,207 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       {/* ================= 2. AUDIOS MANAGEMENT TAB ================= */}
       {activeTab === 'audios' && (
         <div className="space-y-4">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
             <h3 className="font-amiri font-bold text-xl text-[#0F382C]">
               {lang === 'ar' ? 'إدارة الشروح الصوتية وقوائم الدروس' : 'Manage Audio Series & Lesson Playlists'}
             </h3>
-            <div className="flex flex-wrap items-center gap-2.5">
-              <div className="relative flex-1 sm:w-64">
+            <div className="flex flex-wrap items-center gap-2 font-readex text-xs">
+              <div className="relative flex-1 min-w-[180px] sm:w-48">
                 <input
                   type="text"
                   value={tabSearch}
                   onChange={e => setTabSearch(e.target.value)}
-                  placeholder={lang === 'ar' ? 'بحث في الشروح...' : 'Search audio series...'}
-                  className="w-full pl-9 pr-3 py-2 rounded-xl border border-[#E0D4C1] bg-white text-xs font-readex"
+                  placeholder={lang === 'ar' ? 'بحث في الشروح أو R2...' : 'Search series or R2...'}
+                  className="w-full pl-9 pr-3 py-2 rounded-xl border border-[#E0D4C1] bg-white text-xs"
                 />
                 <Search className="w-3.5 h-3.5 text-[#A58455] absolute left-3 top-1/2 -translate-y-1/2" />
               </div>
+
+              <select
+                value={filterCategory}
+                onChange={e => setFilterCategory(e.target.value)}
+                className="px-2.5 py-2 rounded-xl border border-[#E0D4C1] bg-white text-xs text-[#0F382C]"
+              >
+                <option value="all">{lang === 'ar' ? 'كل الفنون' : 'All Disciplines'}</option>
+                {categories.map(c => (
+                  <option key={c} value={c}>{translateCategory(c)}</option>
+                ))}
+              </select>
+
+              <select
+                value={filterLevel}
+                onChange={e => setFilterLevel(e.target.value)}
+                className="px-2.5 py-2 rounded-xl border border-[#E0D4C1] bg-white text-xs text-[#0F382C]"
+              >
+                <option value="all">{lang === 'ar' ? 'كل المستويات' : 'All Levels'}</option>
+                <option value="beginner">{t('beginner')}</option>
+                <option value="intermediate">{t('intermediate')}</option>
+                <option value="advanced">{t('advanced')}</option>
+              </select>
+
+              <select
+                value={filterCoverage}
+                onChange={e => setFilterCoverage(e.target.value as any)}
+                className="px-2.5 py-2 rounded-xl border border-[#E0D4C1] bg-white text-xs text-[#0F382C]"
+              >
+                <option value="all">{lang === 'ar' ? 'كل الدروس' : 'All Coverage'}</option>
+                <option value="recorded">{lang === 'ar' ? 'بها تسجيلات (>0)' : 'Has Recordings (>0)'}</option>
+                <option value="empty">{lang === 'ar' ? 'فارغة (0 دروس)' : 'Empty (0 lessons)'}</option>
+              </select>
+
+              <select
+                value={sortBy}
+                onChange={e => setSortBy(e.target.value as any)}
+                className="px-2.5 py-2 rounded-xl border border-[#E0D4C1] bg-white text-xs text-[#0F382C]"
+              >
+                <option value="default">{lang === 'ar' ? 'الترتيب الافتراضي' : 'Default Order'}</option>
+                <option value="title">{lang === 'ar' ? 'حسب العنوان' : 'Title A-Z'}</option>
+                <option value="metric">{lang === 'ar' ? 'الأكثر دروساً' : 'Lessons Count ↓'}</option>
+              </select>
+
+              {renderPageSizeControl()}
+
+              {hasActiveFilters && (
+                <button
+                  type="button"
+                  onClick={resetCurrentTabFilters}
+                  className="px-2.5 py-2 rounded-xl bg-[#F4EFE6] text-[#8C6D3B] hover:text-[#0F382C]"
+                  title={lang === 'ar' ? 'إعادة ضبط الفلاتر' : 'Reset filters'}
+                >
+                  <RotateCcw className="w-3.5 h-3.5" />
+                </button>
+              )}
+
               <button
                 onClick={openNewAudio}
-                className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-[#0F382C] text-white text-xs font-readex font-bold hover:bg-[#164E3D] shadow-xs"
+                className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-[#0F382C] text-white text-xs font-bold hover:bg-[#164E3D] shadow-xs"
               >
                 <Plus className="w-4 h-4 text-[#DFC7A5]" />
-                <span>{lang === 'ar' ? 'إضافة شرح صوتي جديد' : 'Add Audio Course'}</span>
+                <span>{lang === 'ar' ? 'إضافة شرح' : 'Add Audio'}</span>
               </button>
             </div>
           </div>
+
+          {renderSelectAllBanner(paginatedAudios, filteredAudios)}
 
           <div className="bg-white rounded-2xl border border-[#EADFCB] overflow-x-auto shadow-xs">
             <table className="w-full text-right text-xs font-readex rtl:text-right ltr:text-left">
               <thead className="bg-[#F6F1E7] border-b border-[#EADFCB] text-[#0F382C]">
                 <tr>
+                  <th className="p-3.5 w-10 text-center">
+                    {renderSelectHeaderCheckbox(paginatedAudios)}
+                  </th>
                   <th className="p-3.5 font-bold">{lang === 'ar' ? 'عنوان الشرح' : 'Course Title'}</th>
                   <th className="p-3.5 font-bold">{lang === 'ar' ? 'المستوى' : 'Level'}</th>
                   <th className="p-3.5 font-bold">{lang === 'ar' ? 'الفن' : 'Discipline'}</th>
-                  <th className="p-3.5 font-bold">{lang === 'ar' ? 'الدروس المسجلة' : 'Recorded Lessons'}</th>
+                  <th className="p-3.5 font-bold">{lang === 'ar' ? 'الدروس المسجلة' : 'Recorded'}</th>
                   <th className="p-3.5 font-bold">{lang === 'ar' ? 'الحالة' : 'Status'}</th>
                   <th className="p-3.5 text-center font-bold">{lang === 'ar' ? 'الإجراءات' : 'Actions'}</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-[#EADFCB]/60">
-                {paginatedAudios.map(a => {
-                  const lessonsCount = a.lessons?.length || 0;
-                  return (
-                    <tr key={a.id} className="hover:bg-[#FDFBF7]">
-                      <td className="p-3.5">
-                        <div className="font-amiri font-bold text-base text-[#0F382C]">{a.title}</div>
-                        <div className="text-[11px] text-[#8C6D3B]">{a.series}</div>
-                      </td>
-                      <td className="p-3.5">
-                        <span className="px-2 py-0.5 rounded bg-[#F4EFE6] font-bold">
-                          {translateLevel(a.level)}
-                        </span>
-                      </td>
-                      <td className="p-3.5">{translateCategory(a.category)}</td>
-                      <td className="p-3.5">
-                        <div className="flex items-center gap-1.5 flex-wrap">
-                          <span className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full border font-bold ${lessonsCount > 0 ? 'bg-emerald-50 text-emerald-800 border-emerald-200' : 'bg-[#FAF6EE] text-[#8C6D3B] border-[#EADFCB]'}`}>
-                            <ListMusic className="w-3.5 h-3.5" />
-                            <span>{lessonsCount}</span>
+                {paginatedAudios.length === 0 ? (
+                  <tr>
+                    <td colSpan={7} className="p-8 text-center text-[#8C6D3B]">
+                      {lang === 'ar' ? 'لا توجد شروح صوتية مطابقة' : 'No matching audio courses found'}
+                    </td>
+                  </tr>
+                ) : (
+                  paginatedAudios.map(a => {
+                    const lessonsCount = a.lessons?.length || 0;
+                    const isChecked = selectedIds.has(a.id);
+                    return (
+                      <tr key={a.id} className={`transition ${isChecked ? 'bg-[#FAF5EB]' : 'hover:bg-[#FDFBF7]'}`}>
+                        <td className="p-3.5 text-center">
+                          <input
+                            type="checkbox"
+                            checked={isChecked}
+                            onChange={() => toggleSelectItem(a.id)}
+                            className="w-4 h-4 rounded border-[#C5A880] accent-[#0F382C] cursor-pointer"
+                          />
+                        </td>
+                        <td className="p-3.5">
+                          <div className="font-amiri font-bold text-base text-[#0F382C]">{a.title}</div>
+                          <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-[#8C6D3B]">
+                            <span>{a.series}</span>
+                            {a.r2Prefix && (
+                              <span dir="ltr" className="px-1.5 py-0.2 rounded bg-[#FAF6EE] border border-[#EADFCB] font-latin text-[10px] text-[#0F382C]">
+                                /{a.r2Prefix}
+                              </span>
+                            )}
+                          </div>
+                        </td>
+                        <td className="p-3.5">
+                          <span className="px-2 py-0.5 rounded bg-[#F4EFE6] font-bold">
+                            {translateLevel(a.level)}
                           </span>
-                          {a.expectedLessons && lessonsCount < a.expectedLessons && (
-                            <span className="text-[10px] text-[#8C6D3B]">
-                              / {a.expectedLessons}
-                            </span>
-                          )}
-                        </div>
-                      </td>
-                      <td className="p-3.5">{a.status}</td>
-                      <td className="p-3.5 text-center">
-                        <div className="flex items-center justify-center gap-1.5">
-                          {a.r2Prefix && (
-                            <button
-                              onClick={() => handleSyncSingleCourseR2(a)}
-                              className="p-1.5 rounded-lg bg-[#FAF6EE] text-[#0F382C] hover:bg-[#E8DCC9] border border-[#E0D4C1]"
-                              title={lang === 'ar' ? 'مزامنة من R2' : 'Sync from R2'}
+                        </td>
+                        <td className="p-3.5">{translateCategory(a.category)}</td>
+                        <td className="p-3.5">
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <span
+                              className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full border font-bold ${
+                                lessonsCount > 0
+                                  ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                                  : 'bg-[#FAF6EE] text-[#8C6D3B] border-[#EADFCB]'
+                              }`}
                             >
-                              <RefreshCw className="w-3.5 h-3.5" />
+                              <ListMusic className="w-3.5 h-3.5" />
+                              <span>{lessonsCount}</span>
+                            </span>
+                            {a.expectedLessons && lessonsCount < a.expectedLessons && (
+                              <span className="text-[10px] text-[#8C6D3B]">
+                                / {a.expectedLessons}
+                              </span>
+                            )}
+                          </div>
+                        </td>
+                        <td className="p-3.5">
+                          <button
+                            type="button"
+                            onClick={() => toggleAudioQuickStatus(a)}
+                            title={lang === 'ar' ? 'انقر للتبديل بين مكتمل ودرس مستمر' : 'Click to toggle status'}
+                            className={`px-2 py-0.5 rounded font-bold transition hover:opacity-80 ${
+                              a.status === 'مكتمل'
+                                ? 'bg-emerald-100 text-emerald-800'
+                                : 'bg-amber-100 text-amber-800'
+                            }`}
+                          >
+                            {a.status}
+                          </button>
+                        </td>
+                        <td className="p-3.5 text-center">
+                          <div className="flex items-center justify-center gap-1.5">
+                            {a.r2Prefix && (
+                              <button
+                                onClick={() => handleSyncSingleCourseR2(a)}
+                                className="p-1.5 rounded-lg bg-[#FAF6EE] text-[#0F382C] hover:bg-[#E8DCC9] border border-[#E0D4C1]"
+                                title={lang === 'ar' ? 'مزامنة من R2' : 'Sync from R2'}
+                              >
+                                <RefreshCw className="w-3.5 h-3.5" />
+                              </button>
+                            )}
+                            <button
+                              onClick={() => openEditAudio(a)}
+                              className="px-2.5 py-1 rounded-lg bg-[#F4EFE6] text-[#0F382C] hover:bg-[#E8DCC9] text-[11px] font-bold flex items-center gap-1"
+                              title={t('edit')}
+                            >
+                              <Edit className="w-3.5 h-3.5" />
+                              <span>{lang === 'ar' ? 'تعديل والدروس' : 'Edit & Lessons'}</span>
                             </button>
-                          )}
-                          <button
-                            onClick={() => openEditAudio(a)}
-                            className="px-2.5 py-1 rounded-lg bg-[#F4EFE6] text-[#0F382C] hover:bg-[#E8DCC9] text-[11px] font-bold flex items-center gap-1"
-                            title={t('edit')}
-                          >
-                            <Edit className="w-3.5 h-3.5" />
-                            <span>{lang === 'ar' ? 'تعديل والدروس' : 'Edit & Lessons'}</span>
-                          </button>
-                          <button
-                            onClick={() => requestDeleteAudio(a)}
-                            className="p-1.5 rounded text-red-600 hover:bg-red-50"
-                            title={t('delete')}
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })}
+                            <button
+                              onClick={() => requestDeleteAudio(a)}
+                              className="p-1.5 rounded text-red-600 hover:bg-red-50"
+                              title={t('delete')}
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })
+                )}
               </tbody>
             </table>
           </div>
@@ -1616,7 +2469,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           <Pagination
             currentPage={tabPage}
             totalItems={filteredAudios.length}
-            pageSize={ADMIN_PAGE_SIZE}
+            pageSize={pageSize}
+            pageSizeOptions={PAGE_SIZE_OPTIONS}
+            onPageSizeChange={setPageSize}
             onPageChange={setTabPage}
           />
         </div>
@@ -1625,88 +2480,158 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       {/* ================= 3. POETRY MANAGEMENT TAB ================= */}
       {activeTab === 'poetry' && (
         <div className="space-y-4">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
             <h3 className="font-amiri font-bold text-xl text-[#0F382C]">
               {lang === 'ar' ? 'إدارة المنظومات والديوان الشعري' : 'Manage Poetry & Diwan'}
             </h3>
-            <div className="flex flex-wrap items-center gap-2.5">
-              <div className="relative flex-1 sm:w-64">
+            <div className="flex flex-wrap items-center gap-2 font-readex text-xs">
+              <div className="relative flex-1 min-w-[180px] sm:w-52">
                 <input
                   type="text"
                   value={tabSearch}
                   onChange={e => setTabSearch(e.target.value)}
                   placeholder={lang === 'ar' ? 'بحث في المنظومات...' : 'Search poems...'}
-                  className="w-full pl-9 pr-3 py-2 rounded-xl border border-[#E0D4C1] bg-white text-xs font-readex"
+                  className="w-full pl-9 pr-3 py-2 rounded-xl border border-[#E0D4C1] bg-white text-xs"
                 />
                 <Search className="w-3.5 h-3.5 text-[#A58455] absolute left-3 top-1/2 -translate-y-1/2" />
               </div>
+
+              <select
+                value={filterCategory}
+                onChange={e => setFilterCategory(e.target.value)}
+                className="px-3 py-2 rounded-xl border border-[#E0D4C1] bg-white text-xs text-[#0F382C]"
+              >
+                <option value="all">{lang === 'ar' ? 'كل التصنيفات' : 'All Categories'}</option>
+                {categories.map(c => (
+                  <option key={c} value={c}>{translateCategory(c)}</option>
+                ))}
+              </select>
+
+              <select
+                value={sortBy}
+                onChange={e => setSortBy(e.target.value as any)}
+                className="px-3 py-2 rounded-xl border border-[#E0D4C1] bg-white text-xs text-[#0F382C]"
+              >
+                <option value="default">{lang === 'ar' ? 'الترتيب الافتراضي' : 'Default Order'}</option>
+                <option value="title">{lang === 'ar' ? 'حسب العنوان' : 'Title A-Z'}</option>
+                <option value="metric">{lang === 'ar' ? 'الأكثر أبياتاً' : 'Verses High-Low'}</option>
+              </select>
+
+              {renderPageSizeControl()}
+
+              {hasActiveFilters && (
+                <button
+                  type="button"
+                  onClick={resetCurrentTabFilters}
+                  className="px-2.5 py-2 rounded-xl bg-[#F4EFE6] text-[#8C6D3B] hover:text-[#0F382C]"
+                  title={lang === 'ar' ? 'إعادة ضبط الفلاتر' : 'Reset filters'}
+                >
+                  <RotateCcw className="w-3.5 h-3.5" />
+                </button>
+              )}
+
               <button
                 onClick={openNewPoem}
-                className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-[#0F382C] text-white text-xs font-readex font-bold hover:bg-[#164E3D] shadow-xs"
+                className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-[#0F382C] text-white text-xs font-bold hover:bg-[#164E3D] shadow-xs"
               >
                 <Plus className="w-4 h-4 text-[#DFC7A5]" />
-                <span>{lang === 'ar' ? 'إضافة منظومة جديدة' : 'Add Poem'}</span>
+                <span>{lang === 'ar' ? 'إضافة منظومة' : 'Add Poem'}</span>
               </button>
             </div>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {paginatedPoems.map(p => (
-              <div
-                key={p.id}
-                className="p-5 rounded-2xl bg-white border border-[#EADFCB] shadow-xs flex flex-col justify-between"
-              >
-                <div>
-                  <div className="flex items-center justify-between mb-2">
-                    <span className="text-xs px-2.5 py-0.5 rounded bg-[#F4EFE6] text-[#A58455] font-readex font-semibold">
-                      {translateMeter(p.meter)} • {translateCategory(p.category)}
-                    </span>
-                    <span className="text-xs font-bold text-[#0F382C]">
-                      {p.totalVerses} {t('verses_count')}
-                    </span>
-                  </div>
-                  <h4 className="font-amiri font-bold text-xl text-[#0F382C] mb-2">
-                    {p.title}
-                  </h4>
-                  <p className="font-naskh text-xs text-[#3A403C] line-clamp-2 leading-relaxed">
-                    {p.summary}
-                  </p>
-                </div>
+          {renderSelectAllBanner(paginatedPoems, filteredPoems)}
 
-                <div className="flex items-center justify-between gap-2 pt-3 border-t border-[#EADFCB]/60 mt-3 text-xs font-readex text-[#8C6D3B]">
-                  <span>{p.year}</span>
-                  <div className="flex items-center gap-2">
-                    <button
-                      onClick={() => {
-                        setEditingPoem(p);
-                        const lines = (p.verses || [])
-                          .map(v => `${v.sadr} ۞ ${v.ajuz}`)
-                          .join('\n');
-                        setPoemRawLines(lines);
-                        setIsPoemModalOpen(true);
-                      }}
-                      className="p-1.5 rounded hover:bg-[#F4EFE6] text-[#0F382C]"
-                      title={t('edit')}
-                    >
-                      <Edit className="w-4 h-4" />
-                    </button>
-                    <button
-                      onClick={() => requestDeletePoem(p)}
-                      className="p-1.5 rounded hover:bg-red-50 text-red-600"
-                      title={t('delete')}
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
-                  </div>
-                </div>
-              </div>
-            ))}
+          <div className="bg-white rounded-2xl border border-[#EADFCB] overflow-x-auto shadow-xs">
+            <table className="w-full text-right text-xs font-readex rtl:text-right ltr:text-left">
+              <thead className="bg-[#F6F1E7] border-b border-[#EADFCB] text-[#0F382C]">
+                <tr>
+                  <th className="p-3.5 w-10 text-center">
+                    {renderSelectHeaderCheckbox(paginatedPoems)}
+                  </th>
+                  <th className="p-3.5 font-bold">{lang === 'ar' ? 'عنوان المنظومة' : 'Poem Title'}</th>
+                  <th className="p-3.5 font-bold">{lang === 'ar' ? 'البحر الشعري' : 'Meter'}</th>
+                  <th className="p-3.5 font-bold">{lang === 'ar' ? 'التصنيف' : 'Category'}</th>
+                  <th className="p-3.5 font-bold">{lang === 'ar' ? 'الأبيات' : 'Verses'}</th>
+                  <th className="p-3.5 font-bold">{t('year')}</th>
+                  <th className="p-3.5 text-center font-bold">{lang === 'ar' ? 'الإجراءات' : 'Actions'}</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-[#EADFCB]/60">
+                {paginatedPoems.length === 0 ? (
+                  <tr>
+                    <td colSpan={7} className="p-8 text-center text-[#8C6D3B]">
+                      {lang === 'ar' ? 'لا توجد منظومات مطابقة' : 'No matching poems found'}
+                    </td>
+                  </tr>
+                ) : (
+                  paginatedPoems.map(p => {
+                    const isChecked = selectedIds.has(p.id);
+                    return (
+                      <tr key={p.id} className={`transition ${isChecked ? 'bg-[#FAF5EB]' : 'hover:bg-[#FDFBF7]'}`}>
+                        <td className="p-3.5 text-center">
+                          <input
+                            type="checkbox"
+                            checked={isChecked}
+                            onChange={() => toggleSelectItem(p.id)}
+                            className="w-4 h-4 rounded border-[#C5A880] accent-[#0F382C] cursor-pointer"
+                          />
+                        </td>
+                        <td className="p-3.5">
+                          <div className="font-amiri font-bold text-base text-[#0F382C]">{p.title}</div>
+                          {p.summary && (
+                            <div className="text-[11px] text-[#5A635E] line-clamp-1 max-w-md">{p.summary}</div>
+                          )}
+                        </td>
+                        <td className="p-3.5">
+                          <span className="px-2 py-0.5 rounded bg-[#F4EFE6] text-[#A58455] font-semibold">
+                            {translateMeter(p.meter)}
+                          </span>
+                        </td>
+                        <td className="p-3.5">{translateCategory(p.category)}</td>
+                        <td className="p-3.5 font-bold text-[#0F382C]">
+                          {p.totalVerses} {t('verses_count')}
+                        </td>
+                        <td className="p-3.5 text-[#8C6D3B]">{p.year}</td>
+                        <td className="p-3.5 text-center">
+                          <div className="flex items-center justify-center gap-1">
+                            <button
+                              onClick={() => {
+                                setEditingPoem(p);
+                                const lines = (p.verses || [])
+                                  .map(v => `${v.sadr} ۞ ${v.ajuz}`)
+                                  .join('\n');
+                                setPoemRawLines(lines);
+                                setIsPoemModalOpen(true);
+                              }}
+                              className="p-1.5 rounded hover:bg-[#F4EFE6] text-[#0F382C]"
+                              title={t('edit')}
+                            >
+                              <Edit className="w-4 h-4" />
+                            </button>
+                            <button
+                              onClick={() => requestDeletePoem(p)}
+                              className="p-1.5 rounded hover:bg-red-50 text-red-600"
+                              title={t('delete')}
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })
+                )}
+              </tbody>
+            </table>
           </div>
 
           <Pagination
             currentPage={tabPage}
             totalItems={filteredPoems.length}
-            pageSize={ADMIN_PAGE_SIZE}
+            pageSize={pageSize}
+            pageSizeOptions={PAGE_SIZE_OPTIONS}
+            onPageSizeChange={setPageSize}
             onPageChange={setTabPage}
           />
         </div>
@@ -1715,77 +2640,164 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       {/* ================= 4. ARTICLES MANAGEMENT TAB ================= */}
       {activeTab === 'articles' && (
         <div className="space-y-4">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
             <h3 className="font-amiri font-bold text-xl text-[#0F382C]">
               {lang === 'ar' ? 'إدارة الخواطر والمقالات' : 'Manage Reflections & Articles'}
             </h3>
-            <div className="flex flex-wrap items-center gap-2.5">
-              <div className="relative flex-1 sm:w-64">
+            <div className="flex flex-wrap items-center gap-2 font-readex text-xs">
+              <div className="relative flex-1 min-w-[180px] sm:w-52">
                 <input
                   type="text"
                   value={tabSearch}
                   onChange={e => setTabSearch(e.target.value)}
                   placeholder={lang === 'ar' ? 'بحث في الخواطر...' : 'Search articles...'}
-                  className="w-full pl-9 pr-3 py-2 rounded-xl border border-[#E0D4C1] bg-white text-xs font-readex"
+                  className="w-full pl-9 pr-3 py-2 rounded-xl border border-[#E0D4C1] bg-white text-xs"
                 />
                 <Search className="w-3.5 h-3.5 text-[#A58455] absolute left-3 top-1/2 -translate-y-1/2" />
               </div>
+
+              <select
+                value={filterArticleType}
+                onChange={e => setFilterArticleType(e.target.value)}
+                className="px-3 py-2 rounded-xl border border-[#E0D4C1] bg-white text-xs text-[#0F382C]"
+              >
+                <option value="all">{lang === 'ar' ? 'كل الأنواع' : 'All Types'}</option>
+                <option value="خواطر ابن بيضاء">{translateArticleType('خواطر ابن بيضاء')}</option>
+                <option value="بحث أكاديمي">{translateArticleType('بحث أكاديمي')}</option>
+                <option value="مقال عقدي">{translateArticleType('مقال عقدي')}</option>
+                <option value="مقال لغوي">{lang === 'ar' ? 'مقال لغوي' : 'Linguistic Article'}</option>
+              </select>
+
+              <select
+                value={filterCategory}
+                onChange={e => setFilterCategory(e.target.value)}
+                className="px-3 py-2 rounded-xl border border-[#E0D4C1] bg-white text-xs text-[#0F382C]"
+              >
+                <option value="all">{lang === 'ar' ? 'كل الفنون' : 'All Disciplines'}</option>
+                {categories.map(c => (
+                  <option key={c} value={c}>{translateCategory(c)}</option>
+                ))}
+              </select>
+
+              {renderPageSizeControl()}
+
+              {hasActiveFilters && (
+                <button
+                  type="button"
+                  onClick={resetCurrentTabFilters}
+                  className="px-2.5 py-2 rounded-xl bg-[#F4EFE6] text-[#8C6D3B] hover:text-[#0F382C]"
+                  title={lang === 'ar' ? 'إعادة ضبط الفلاتر' : 'Reset filters'}
+                >
+                  <RotateCcw className="w-3.5 h-3.5" />
+                </button>
+              )}
+
               <button
                 onClick={openNewArticle}
-                className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-[#0F382C] text-white text-xs font-readex font-bold hover:bg-[#164E3D] shadow-xs"
+                className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-[#0F382C] text-white text-xs font-bold hover:bg-[#164E3D] shadow-xs"
               >
                 <Plus className="w-4 h-4 text-[#DFC7A5]" />
-                <span>{lang === 'ar' ? 'نشر خاطرة أو مقال جديد' : 'New Article'}</span>
+                <span>{lang === 'ar' ? 'نشر خاطرة / مقال' : 'New Article'}</span>
               </button>
             </div>
           </div>
 
-          <div className="space-y-3">
-            {paginatedArticles.map(art => (
-              <div
-                key={art.id}
-                className="p-4 rounded-2xl bg-white border border-[#EADFCB] shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-4"
-              >
-                <div className="space-y-1">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="text-[11px] px-2.5 py-0.5 rounded bg-amber-50 text-amber-900 border border-amber-200 font-readex font-bold">
-                      {translateArticleType(art.type)}
-                    </span>
-                    <span className="text-[11px] px-2 py-0.5 rounded bg-[#F4EFE6] text-[#0F382C] font-readex">
-                      {translateCategory(art.category)}
-                    </span>
-                    <span className="text-xs text-[#A58455] font-readex">{art.date}</span>
-                  </div>
-                  <h4 className="font-amiri font-bold text-lg text-[#0F382C]">{art.title}</h4>
-                  {art.summary && (
-                    <p className="font-naskh text-xs text-[#4B554E] line-clamp-1">{art.summary}</p>
-                  )}
-                </div>
+          {renderSelectAllBanner(paginatedArticles, filteredArticles)}
 
-                <div className="flex items-center gap-2 shrink-0">
-                  <button
-                    onClick={() => openEditArticle(art)}
-                    className="p-2 rounded-lg hover:bg-[#F4EFE6] text-[#0F382C]"
-                    title={t('edit')}
-                  >
-                    <Edit className="w-4 h-4" />
-                  </button>
-                  <button
-                    onClick={() => requestDeleteArticle(art)}
-                    className="p-2 rounded-lg hover:bg-red-50 text-red-600"
-                    title={t('delete')}
-                  >
-                    <Trash2 className="w-4 h-4" />
-                  </button>
-                </div>
-              </div>
-            ))}
+          <div className="bg-white rounded-2xl border border-[#EADFCB] overflow-x-auto shadow-xs">
+            <table className="w-full text-right text-xs font-readex rtl:text-right ltr:text-left">
+              <thead className="bg-[#F6F1E7] border-b border-[#EADFCB] text-[#0F382C]">
+                <tr>
+                  <th className="p-3.5 w-10 text-center">
+                    {renderSelectHeaderCheckbox(paginatedArticles)}
+                  </th>
+                  <th className="p-3.5 font-bold">{lang === 'ar' ? 'العنوان والملخص' : 'Title & Excerpt'}</th>
+                  <th className="p-3.5 font-bold">{lang === 'ar' ? 'النوع' : 'Type'}</th>
+                  <th className="p-3.5 font-bold">{lang === 'ar' ? 'الفن العلمي' : 'Discipline'}</th>
+                  <th className="p-3.5 font-bold">{lang === 'ar' ? 'التاريخ' : 'Date'}</th>
+                  <th className="p-3.5 text-center font-bold">{lang === 'ar' ? 'الإجراءات' : 'Actions'}</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-[#EADFCB]/60">
+                {paginatedArticles.length === 0 ? (
+                  <tr>
+                    <td colSpan={6} className="p-8 text-center text-[#8C6D3B]">
+                      {lang === 'ar' ? 'لا توجد خواطر أو مقالات مطابقة' : 'No matching articles found'}
+                    </td>
+                  </tr>
+                ) : (
+                  paginatedArticles.map(art => {
+                    const isChecked = selectedIds.has(art.id);
+                    return (
+                      <tr key={art.id} className={`transition ${isChecked ? 'bg-[#FAF5EB]' : 'hover:bg-[#FDFBF7]'}`}>
+                        <td className="p-3.5 text-center">
+                          <input
+                            type="checkbox"
+                            checked={isChecked}
+                            onChange={() => toggleSelectItem(art.id)}
+                            className="w-4 h-4 rounded border-[#C5A880] accent-[#0F382C] cursor-pointer"
+                          />
+                        </td>
+                        <td className="p-3.5">
+                          <div className="font-amiri font-bold text-base text-[#0F382C]">{art.title}</div>
+                          {art.summary && (
+                            <div className="font-naskh text-[11px] text-[#4B554E] line-clamp-1 max-w-md">{art.summary}</div>
+                          )}
+                        </td>
+                        <td className="p-3.5">
+                          <span className="text-[11px] px-2.5 py-0.5 rounded bg-amber-50 text-amber-900 border border-amber-200 font-bold">
+                            {translateArticleType(art.type)}
+                          </span>
+                        </td>
+                        <td className="p-3.5">{translateCategory(art.category)}</td>
+                        <td className="p-3.5 text-[#A58455]">{art.date}</td>
+                        <td className="p-3.5 text-center">
+                          <div className="flex items-center justify-center gap-1">
+                            <button
+                              onClick={() => openEditArticle(art)}
+                              className="p-1.5 rounded-lg hover:bg-[#F4EFE6] text-[#0F382C]"
+                              title={t('edit')}
+                            >
+                              <Edit className="w-4 h-4" />
+                            </button>
+                            <button
+                              onClick={() => {
+                                const { id: _ignore, ...copy } = art;
+                                setEditingArticle({
+                                  ...copy,
+                                  title: `${art.title} (${lang === 'ar' ? 'نسخة' : 'Copy'})`
+                                });
+                                setArticleTagsInput((art.tags || []).join(', '));
+                                setIsArticleModalOpen(true);
+                              }}
+                              className="p-1.5 rounded-lg hover:bg-[#F4EFE6] text-[#8C6D3B]"
+                              title={lang === 'ar' ? 'نسخ كجديد' : 'Duplicate'}
+                            >
+                              <Copy className="w-3.5 h-3.5" />
+                            </button>
+                            <button
+                              onClick={() => requestDeleteArticle(art)}
+                              className="p-1.5 rounded-lg hover:bg-red-50 text-red-600"
+                              title={t('delete')}
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })
+                )}
+              </tbody>
+            </table>
           </div>
 
           <Pagination
             currentPage={tabPage}
             totalItems={filteredArticles.length}
-            pageSize={ADMIN_PAGE_SIZE}
+            pageSize={pageSize}
+            pageSizeOptions={PAGE_SIZE_OPTIONS}
+            onPageSizeChange={setPageSize}
             onPageChange={setTabPage}
           />
         </div>
@@ -2199,12 +3211,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       {/* ================= 6. QUESTIONS MANAGEMENT TAB ================= */}
       {activeTab === 'questions' && (
         <div className="space-y-4">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
             <h3 className="font-amiri font-bold text-xl text-[#0F382C]">
               {lang === 'ar' ? 'مراجعة وإجابة أسئلة واستفتاءات الطلاب' : 'Review, Answer & Moderate Inquiries'}
             </h3>
-            <div className="flex flex-wrap items-center gap-2">
-              <div className="inline-flex rounded-xl border border-[#E0D4C1] bg-white p-1 text-xs font-readex">
+            <div className="flex flex-wrap items-center gap-2 font-readex text-xs">
+              <div className="inline-flex rounded-xl border border-[#E0D4C1] bg-white p-1 text-xs">
                 <button
                   onClick={() => setQuestionFilter('all')}
                   className={`px-3 py-1 rounded-lg transition ${questionFilter === 'all' ? 'bg-[#0F382C] text-white font-bold' : 'text-[#0F382C]'}`}
@@ -2224,100 +3236,128 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   {lang === 'ar' ? 'المجاب عنها' : 'Answered'} ({questions.length - pendingQuestionsCount})
                 </button>
               </div>
-              <div className="relative w-full sm:w-56">
+              <div className="relative w-full sm:w-48">
                 <input
                   type="text"
                   value={tabSearch}
                   onChange={e => setTabSearch(e.target.value)}
                   placeholder={lang === 'ar' ? 'بحث في الأسئلة...' : 'Search inquiries...'}
-                  className="w-full pl-9 pr-3 py-2 rounded-xl border border-[#E0D4C1] bg-white text-xs font-readex"
+                  className="w-full pl-9 pr-3 py-2 rounded-xl border border-[#E0D4C1] bg-white text-xs"
                 />
                 <Search className="w-3.5 h-3.5 text-[#A58455] absolute left-3 top-1/2 -translate-y-1/2" />
               </div>
+              {renderPageSizeControl()}
             </div>
           </div>
 
+          {paginatedQuestions.length > 0 && (
+            <div className="flex items-center justify-between px-3 py-2 rounded-xl bg-[#F6F1E7] border border-[#EADFCB] text-xs font-readex text-[#0F382C]">
+              <label className="inline-flex items-center gap-2 cursor-pointer font-bold">
+                {renderSelectHeaderCheckbox(paginatedQuestions)}
+                <span>{lang === 'ar' ? 'تحديد كل الأسئلة في هذه الصفحة' : 'Select all inquiries on this page'}</span>
+              </label>
+              <span className="text-[#8C6D3B]">
+                {filteredQuestions.length} {lang === 'ar' ? 'سؤالاً' : 'inquiries'}
+              </span>
+            </div>
+          )}
+
+          {renderSelectAllBanner(paginatedQuestions, filteredQuestions)}
+
           <div className="space-y-4">
-            {paginatedQuestions.map(q => (
-              <div
-                key={q.id}
-                className="p-5 rounded-2xl bg-white border border-[#EADFCB] shadow-xs space-y-3"
-              >
-                <div className="flex flex-wrap items-center justify-between gap-2 text-xs font-readex">
-                  <span className="font-bold text-[#0F382C]">
-                    {t('inquirer')}: {q.studentName} ({translateCategory(q.category)})
-                  </span>
-                  <div className="flex items-center gap-2">
-                    <span className={`px-2 py-0.5 rounded-full text-[11px] font-bold ${q.answer ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'}`}>
-                      {q.answer ? (lang === 'ar' ? 'تمت الإجابة' : 'Answered') : (lang === 'ar' ? 'قيد الانتظار' : 'Pending')}
-                    </span>
-                    <span className="text-[#A58455]">{q.date}</span>
-                    <button
-                      onClick={() => requestDeleteQuestion(q)}
-                      className="p-1 rounded text-red-600 hover:bg-red-50"
-                      title={t('delete')}
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
-                  </div>
-                </div>
-
-                <p className="font-naskh text-sm font-semibold text-[#1E1E1E]">
-                  «{q.question}»
-                </p>
-
-                {answeringQId === q.id ? (
-                  <div className="space-y-2 pt-2">
-                    <textarea
-                      rows={4}
-                      value={answerText}
-                      onChange={e => setAnswerText(e.target.value)}
-                      placeholder={lang === 'ar' ? 'اكتب جواب الشيخ المعتمد هنا...' : 'Write official scholarly answer here...'}
-                      className="w-full p-3 rounded-xl border border-[#E0D4C1] text-sm font-naskh leading-relaxed"
-                    />
+            {paginatedQuestions.map(q => {
+              const isChecked = selectedIds.has(q.id);
+              return (
+                <div
+                  key={q.id}
+                  className={`p-5 rounded-2xl border shadow-xs space-y-3 transition ${isChecked ? 'bg-[#FAF5EB] border-[#C5A880]' : 'bg-white border-[#EADFCB]'}`}
+                >
+                  <div className="flex flex-wrap items-center justify-between gap-2 text-xs font-readex">
+                    <div className="flex items-center gap-2.5">
+                      <input
+                        type="checkbox"
+                        checked={isChecked}
+                        onChange={() => toggleSelectItem(q.id)}
+                        className="w-4 h-4 rounded border-[#C5A880] accent-[#0F382C] cursor-pointer"
+                      />
+                      <span className="font-bold text-[#0F382C]">
+                        {t('inquirer')}: {q.studentName} ({translateCategory(q.category)})
+                      </span>
+                    </div>
                     <div className="flex items-center gap-2">
+                      <span className={`px-2 py-0.5 rounded-full text-[11px] font-bold ${q.answer ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'}`}>
+                        {q.answer ? (lang === 'ar' ? 'تمت الإجابة' : 'Answered') : (lang === 'ar' ? 'قيد الانتظار' : 'Pending')}
+                      </span>
+                      <span className="text-[#A58455]">{q.date}</span>
                       <button
-                        onClick={() => handleSaveAnswer(q.id)}
-                        className="px-4 py-2 rounded-xl bg-[#0F382C] text-white text-xs font-readex font-bold"
+                        onClick={() => requestDeleteQuestion(q)}
+                        className="p-1 rounded text-red-600 hover:bg-red-50"
+                        title={t('delete')}
                       >
-                        {lang === 'ar' ? 'حفظ الجواب' : 'Save Answer'}
-                      </button>
-                      <button
-                        onClick={() => setAnsweringQId(null)}
-                        className="px-3.5 py-2 rounded-xl bg-gray-100 text-xs font-readex"
-                      >
-                        {t('cancel')}
+                        <Trash2 className="w-4 h-4" />
                       </button>
                     </div>
                   </div>
-                ) : (
-                  <div className="space-y-2">
-                    {q.answer && (
-                      <div className="p-3.5 rounded-xl bg-[#FDFBF7] border border-[#EADFCB] font-naskh text-xs sm:text-sm text-[#0F382C] leading-relaxed">
-                        <span className="font-bold block mb-1 text-xs font-readex text-[#A58455]">{t('shaykh_answer')}</span>
-                        {q.answer}
+
+                  <p className="font-naskh text-sm font-semibold text-[#1E1E1E]">
+                    «{q.question}»
+                  </p>
+
+                  {answeringQId === q.id ? (
+                    <div className="space-y-2 pt-2">
+                      <textarea
+                        rows={4}
+                        value={answerText}
+                        onChange={e => setAnswerText(e.target.value)}
+                        placeholder={lang === 'ar' ? 'اكتب جواب الشيخ المعتمد هنا...' : 'Write official scholarly answer here...'}
+                        className="w-full p-3 rounded-xl border border-[#E0D4C1] text-sm font-naskh leading-relaxed"
+                      />
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => handleSaveAnswer(q.id)}
+                          className="px-4 py-2 rounded-xl bg-[#0F382C] text-white text-xs font-readex font-bold"
+                        >
+                          {lang === 'ar' ? 'حفظ الجواب' : 'Save Answer'}
+                        </button>
+                        <button
+                          onClick={() => setAnsweringQId(null)}
+                          className="px-3.5 py-2 rounded-xl bg-gray-100 text-xs font-readex"
+                        >
+                          {t('cancel')}
+                        </button>
                       </div>
-                    )}
-                    <button
-                      onClick={() => {
-                        setAnsweringQId(q.id);
-                        setAnswerText(q.answer || '');
-                      }}
-                      className="px-3.5 py-1.5 rounded-lg bg-[#0F382C]/10 hover:bg-[#0F382C]/20 text-[#0F382C] text-xs font-readex font-bold inline-flex items-center gap-1.5"
-                    >
-                      <Edit className="w-3.5 h-3.5" />
-                      <span>{q.answer ? (lang === 'ar' ? 'تعديل الجواب' : 'Edit Answer') : (lang === 'ar' ? 'إضافة جواب الشيخ' : 'Add Answer')}</span>
-                    </button>
-                  </div>
-                )}
-              </div>
-            ))}
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      {q.answer && (
+                        <div className="p-3.5 rounded-xl bg-[#FDFBF7] border border-[#EADFCB] font-naskh text-xs sm:text-sm text-[#0F382C] leading-relaxed">
+                          <span className="font-bold block mb-1 text-xs font-readex text-[#A58455]">{t('shaykh_answer')}</span>
+                          {q.answer}
+                        </div>
+                      )}
+                      <button
+                        onClick={() => {
+                          setAnsweringQId(q.id);
+                          setAnswerText(q.answer || '');
+                        }}
+                        className="px-3.5 py-1.5 rounded-lg bg-[#0F382C]/10 hover:bg-[#0F382C]/20 text-[#0F382C] text-xs font-readex font-bold inline-flex items-center gap-1.5"
+                      >
+                        <Edit className="w-3.5 h-3.5" />
+                        <span>{q.answer ? (lang === 'ar' ? 'تعديل الجواب' : 'Edit Answer') : (lang === 'ar' ? 'إضافة جواب الشيخ' : 'Add Answer')}</span>
+                      </button>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
           </div>
 
           <Pagination
             currentPage={tabPage}
             totalItems={filteredQuestions.length}
-            pageSize={ADMIN_PAGE_SIZE}
+            pageSize={pageSize}
+            pageSizeOptions={PAGE_SIZE_OPTIONS}
+            onPageSizeChange={setPageSize}
             onPageChange={setTabPage}
           />
         </div>
@@ -2474,13 +3514,21 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
-                <label className="block text-xs font-readex font-semibold mb-1">{lang === 'ar' ? 'رقم واتساب (أرقام دولية)' : 'WhatsApp Number (digits)'}</label>
+                <label className="block text-xs font-readex font-semibold mb-1">
+                  {lang === 'ar' ? 'رقم واتساب (أرقام دولية — يستقبل طلبات الكتب المدفوعة)' : 'WhatsApp Number (digits — receives Paid Book orders)'}
+                </label>
                 <input
                   type="text"
                   value={profileForm.whatsapp}
                   onChange={e => setProfileForm({ ...profileForm, whatsapp: e.target.value })}
+                  placeholder="2348100966260"
                   className="w-full px-3.5 py-2.5 rounded-xl border border-[#E0D4C1] text-xs font-latin"
                 />
+                <span className="block text-[10px] text-[#8C6D3B] font-readex mt-1">
+                  {lang === 'ar'
+                    ? 'جميع طلبات الكتب المدفوعة والاستفتاءات تتوجه مباشرة إلى هذا الرقم عبر wa.me.'
+                    : 'All paid book orders and student inquiries route directly to this number via wa.me.'}
+                </span>
               </div>
               <div>
                 <label className="block text-xs font-readex font-semibold mb-1">{lang === 'ar' ? 'صيغة العرض للهاتف' : 'Phone Display Format'}</label>
@@ -2824,19 +3872,105 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               />
             </div>
 
-            {/* Book flags & PDF URL */}
+            {/* Book Pricing / Distribution Mode (Free vs Paid) */}
             <div className="p-4 rounded-2xl bg-white border border-[#E0D4C1] space-y-3 font-readex text-xs">
-              <div className="flex flex-wrap gap-4">
-                <label className="flex items-center gap-2 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={Boolean(editingBook.hasPdf)}
-                    onChange={e => setEditingBook({ ...editingBook, hasPdf: e.target.checked })}
-                    className="rounded border-[#C5A880] text-[#0F382C]"
-                  />
-                  <span className="font-semibold text-[#0F382C]">{lang === 'ar' ? 'متاح للتحميل PDF' : 'Available as PDF'}</span>
-                </label>
+              <div className="font-bold text-[#0F382C]">
+                {lang === 'ar' ? 'نوع الإتاحة والتسعير' : 'Pricing & Distribution Mode'}
+              </div>
 
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => setEditingBook({ ...editingBook, isPaid: false })}
+                  className={`px-3 py-2.5 rounded-xl border font-bold transition flex items-center justify-center gap-1.5 ${
+                    !editingBook.isPaid
+                      ? 'bg-[#0F382C] text-white border-[#0F382C] shadow-xs'
+                      : 'bg-[#FAF6EE] text-[#0F382C] border-[#E0D4C1] hover:bg-[#F2ECE1]'
+                  }`}
+                >
+                  <span>{lang === 'ar' ? 'مجاني (تحميل / استفسار)' : 'Free (PDF / Inquiry)'}</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setEditingBook({ ...editingBook, isPaid: true })}
+                  className={`px-3 py-2.5 rounded-xl border font-bold transition flex items-center justify-center gap-1.5 ${
+                    editingBook.isPaid
+                      ? 'bg-[#C5A880] text-[#0F382C] border-[#C5A880] shadow-xs'
+                      : 'bg-[#FAF6EE] text-[#0F382C] border-[#E0D4C1] hover:bg-[#F2ECE1]'
+                  }`}
+                >
+                  <ShoppingBag className="w-3.5 h-3.5" />
+                  <span>{lang === 'ar' ? 'مدفوع (طلب عبر واتساب)' : 'Paid (Order via WhatsApp)'}</span>
+                </button>
+              </div>
+
+              {editingBook.isPaid ? (
+                <div className="space-y-2.5 pt-1">
+                  <div>
+                    <label className="block text-[11px] text-[#8C6D3B] mb-1">
+                      {lang === 'ar' ? 'السعر (اختياري - مثال: 5,000 NGN أو ٢٥ ريال)' : 'Price (Optional - e.g. 5,000 NGN or $15)'}
+                    </label>
+                    <input
+                      type="text"
+                      value={editingBook.price || ''}
+                      onChange={e => setEditingBook({ ...editingBook, price: e.target.value })}
+                      placeholder={lang === 'ar' ? 'مثال: 5,000 NGN' : 'e.g. 5,000 NGN'}
+                      className="w-full px-3 py-2 rounded-xl border border-[#E0D4C1] text-xs font-readex bg-[#FDFBF7]"
+                    />
+                  </div>
+
+                  <div className="p-3 rounded-xl bg-[#FAF3E3] border border-[#C5A880]/60 text-[11px] text-[#5C3D0E] flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex items-center gap-2">
+                      <MessageCircle className="w-4 h-4 text-emerald-700 shrink-0" />
+                      <span>
+                        {lang === 'ar'
+                          ? `سيظهر زر «طلب الكتاب» بدلاً من تحميل PDF، وتُرسل الطلبات مباشرة إلى رقم واتساب: ${profileForm.whatsapp || profile.whatsapp || 'غير محدد'}`
+                          : `"Order Book" will replace PDF download; orders route straight to WhatsApp: ${profileForm.whatsapp || profile.whatsapp || 'Not set'}`}
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsBookModalOpen(false);
+                        setActiveTab('profile');
+                      }}
+                      className="underline font-bold text-[#0F382C] shrink-0"
+                    >
+                      {lang === 'ar' ? 'تعديل الرقم' : 'Edit Number'}
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div className="space-y-2 pt-1">
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={Boolean(editingBook.hasPdf)}
+                      onChange={e => setEditingBook({ ...editingBook, hasPdf: e.target.checked })}
+                      className="rounded border-[#C5A880] text-[#0F382C]"
+                    />
+                    <span className="font-semibold text-[#0F382C]">{lang === 'ar' ? 'متاح للتحميل PDF' : 'Available as PDF'}</span>
+                  </label>
+
+                  {editingBook.hasPdf && (
+                    <div>
+                      <label className="block text-[11px] text-[#8C6D3B] mb-1">
+                        {lang === 'ar' ? 'رابط ملف الـ PDF' : 'PDF Download URL'}
+                      </label>
+                      <input
+                        type="text"
+                        value={editingBook.downloadUrl || ''}
+                        onChange={e => setEditingBook({ ...editingBook, downloadUrl: e.target.value })}
+                        placeholder="https://... or #"
+                        className="w-full px-3 py-2 rounded-xl border border-[#E0D4C1] text-xs font-latin"
+                      />
+                    </div>
+                  )}
+                </div>
+              )}
+
+              <div className="flex flex-wrap gap-4 pt-2 border-t border-[#EADFCB]">
                 <label className="flex items-center gap-2 cursor-pointer">
                   <input
                     type="checkbox"
@@ -2857,21 +3991,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   <span className="font-semibold text-[#0F382C]">{lang === 'ar' ? 'عمل بالمشاركة' : 'Collaborative Work'}</span>
                 </label>
               </div>
-
-              {editingBook.hasPdf && (
-                <div>
-                  <label className="block text-[11px] text-[#8C6D3B] mb-1">
-                    {lang === 'ar' ? 'رابط ملف الـ PDF' : 'PDF Download URL'}
-                  </label>
-                  <input
-                    type="text"
-                    value={editingBook.downloadUrl || ''}
-                    onChange={e => setEditingBook({ ...editingBook, downloadUrl: e.target.value })}
-                    placeholder="https://... or #"
-                    className="w-full px-3 py-2 rounded-xl border border-[#E0D4C1] text-xs font-latin"
-                  />
-                </div>
-              )}
 
               {editingBook.collaborative && (
                 <div>
@@ -3072,7 +4191,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
             {/* FULL LESSONS PLAYLIST EDITOR */}
             <div className="p-4 sm:p-5 rounded-2xl bg-white border border-[#C5A880]/40 space-y-3">
-              <div className="flex items-center justify-between gap-2">
+              <div className="flex flex-wrap items-center justify-between gap-2">
                 <div className="flex items-center gap-2 font-readex">
                   <ListMusic className="w-4 h-4 text-[#0F382C]" />
                   <span className="text-xs sm:text-sm font-bold text-[#0F382C]">
@@ -3082,15 +4201,59 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     {(editingAudio.lessons || []).length} {lang === 'ar' ? 'دروس' : 'lessons'}
                   </span>
                 </div>
-                <button
-                  type="button"
-                  onClick={handleAddLessonRow}
-                  className="px-3 py-1.5 rounded-xl bg-[#0F382C] text-white text-xs font-readex font-bold flex items-center gap-1 hover:bg-[#164E3D]"
-                >
-                  <Plus className="w-3.5 h-3.5 text-[#DFC7A5]" />
-                  <span>{lang === 'ar' ? 'إضافة درس' : 'Add Lesson'}</span>
-                </button>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setShowBulkLessonPaster(v => !v)}
+                    className="px-3 py-1.5 rounded-xl bg-[#F4EFE6] text-[#0F382C] text-xs font-readex font-bold flex items-center gap-1 hover:bg-[#E8DCC9]"
+                  >
+                    <Link2 className="w-3.5 h-3.5 text-[#8C6D3B]" />
+                    <span>{lang === 'ar' ? 'لصق روابط متعددة' : 'Bulk Paste URLs'}</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleAddLessonRow}
+                    className="px-3 py-1.5 rounded-xl bg-[#0F382C] text-white text-xs font-readex font-bold flex items-center gap-1 hover:bg-[#164E3D]"
+                  >
+                    <Plus className="w-3.5 h-3.5 text-[#DFC7A5]" />
+                    <span>{lang === 'ar' ? 'إضافة درس' : 'Add Lesson'}</span>
+                  </button>
+                </div>
               </div>
+
+              {showBulkLessonPaster && (
+                <div className="p-3.5 rounded-xl bg-[#FAF6EE] border border-[#C5A880]/50 space-y-2">
+                  <p className="text-[11px] font-readex text-[#0F382C]">
+                    {lang === 'ar'
+                      ? 'الصق رابط MP3 في كل سطر، أو بصيغة: عنوان الدرس | رابط الملف | المدة'
+                      : 'Paste one MP3 URL per line, or format as: Lesson Title | MP3 URL | Duration'}
+                  </p>
+                  <textarea
+                    rows={4}
+                    dir="ltr"
+                    value={bulkLessonLines}
+                    onChange={e => setBulkLessonLines(e.target.value)}
+                    placeholder={`https://media.example.com/courses/series/01.mp3\nالدرس الثاني | https://media.example.com/courses/series/02.mp3 | 42:00`}
+                    className="w-full p-2.5 rounded-lg border border-[#E0D4C1] text-xs font-latin bg-white"
+                  />
+                  <div className="flex items-center justify-end gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setShowBulkLessonPaster(false)}
+                      className="px-3 py-1.5 rounded-lg text-xs font-readex text-[#5A635E]"
+                    >
+                      {t('cancel')}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleBulkAddLessonsFromText}
+                      className="px-3.5 py-1.5 rounded-lg bg-[#0F382C] text-white text-xs font-readex font-bold"
+                    >
+                      {lang === 'ar' ? 'إدراج الدروس في القائمة' : 'Insert Lessons'}
+                    </button>
+                  </div>
+                </div>
+              )}
 
               <div className="space-y-2.5 max-h-72 overflow-y-auto pr-1">
                 {(editingAudio.lessons || []).map((lesson, idx) => (

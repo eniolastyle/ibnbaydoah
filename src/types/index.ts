@@ -49,6 +49,8 @@ export interface Book {
   description: string;
   downloadUrl?: string;
   hasPdf: boolean;
+  isPaid?: boolean;
+  price?: string;
   featured?: boolean;
 }
 

@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { asc, eq, gt, sql } from 'drizzle-orm';
+import { asc, eq, gt, inArray, sql } from 'drizzle-orm';
 import {
   getPg,
   hasPostgresConfig,
@@ -52,12 +52,25 @@ class DataStore {
   private jsonSessions = new Map<string, { username: string; expiresAt: number }>();
 
   async init() {
-    this.loadJsonFallback();
-    this.loadJsonSessions();
-    return initDatabase();
+    const result = await initDatabase();
+    if (result.engine === 'json') {
+      if (process.env.NODE_ENV === 'production') {
+        throw new Error('JSON storage fallback is disabled in production.');
+      }
+      this.loadJsonFallback();
+      this.loadJsonSessions();
+    }
+    return result;
+  }
+
+  private assertDevFallbackAllowed() {
+    if (process.env.NODE_ENV === 'production') {
+      throw new Error('PostgreSQL database connection required in production; db.json fallback is disabled.');
+    }
   }
 
   private loadJsonFallback(): JsonDbShape {
+    this.assertDevFallbackAllowed();
     try {
       if (fs.existsSync(SEED_DB_PATH)) {
         const parsed = JSON.parse(fs.readFileSync(SEED_DB_PATH, 'utf-8'));
@@ -146,7 +159,7 @@ class DataStore {
   }
 
   private saveJsonFallback() {
-    if (!this.jsonCache) return;
+    if (process.env.NODE_ENV === 'production' || !this.jsonCache) return;
     try {
       const dir = path.dirname(SEED_DB_PATH);
       if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
@@ -176,6 +189,7 @@ class DataStore {
   }
 
   private saveJsonSessions() {
+    if (process.env.NODE_ENV === 'production') return;
     try {
       const dir = path.dirname(SESSIONS_PATH);
       if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
@@ -312,8 +326,8 @@ class DataStore {
 
   // ==================== PROFILE, CATEGORIES, SCHEDULE ====================
   async getProfile(): Promise<Profile> {
-    const cache = this.jsonCache || this.loadJsonFallback();
-    return this.getSetting<Profile>('profile', cache.profile);
+    const fallback = getPg() ? ({} as Profile) : (this.jsonCache || this.loadJsonFallback()).profile;
+    return this.getSetting<Profile>('profile', fallback);
   }
 
   async updateProfile(patch: Partial<Profile>): Promise<Profile> {
@@ -324,8 +338,8 @@ class DataStore {
   }
 
   async getCategories(): Promise<string[]> {
-    const cache = this.jsonCache || this.loadJsonFallback();
-    return this.getSetting<string[]>('categories', cache.categories);
+    const fallback = getPg() ? [] : (this.jsonCache || this.loadJsonFallback()).categories;
+    return this.getSetting<string[]>('categories', fallback);
   }
 
   async updateCategories(categories: string[]): Promise<string[]> {
@@ -334,13 +348,24 @@ class DataStore {
   }
 
   async getLevels(): Promise<LevelInfo[]> {
-    const cache = this.jsonCache || this.loadJsonFallback();
-    return this.getSetting<LevelInfo[]>('levels', cache.levels);
+    const fallback = getPg() ? [] : (this.jsonCache || this.loadJsonFallback()).levels;
+    return this.getSetting<LevelInfo[]>('levels', fallback);
   }
 
   async getSchedule(): Promise<ScheduleData> {
-    const cache = this.jsonCache || this.loadJsonFallback();
-    return this.getSetting<ScheduleData>('schedule', cache.schedule);
+    const emptySchedule: ScheduleData = {
+      weeklyCircles: [],
+      distanceAcademy: {
+        name: '',
+        description: '',
+        features: [],
+        telegramLink: '',
+        whatsappGroup: '',
+      },
+      announcements: [],
+    };
+    const fallback = getPg() ? emptySchedule : (this.jsonCache || this.loadJsonFallback()).schedule;
+    return this.getSetting<ScheduleData>('schedule', fallback);
   }
 
   async updateSchedule(patch: Partial<ScheduleData>): Promise<ScheduleData> {
@@ -370,6 +395,8 @@ class DataStore {
       description: r.description,
       downloadUrl: r.downloadUrl,
       hasPdf: r.hasPdf,
+      isPaid: Boolean(r.isPaid),
+      price: r.price || undefined,
       featured: r.featured,
     }));
   }
@@ -397,6 +424,8 @@ class DataStore {
       description: book.description,
       downloadUrl: book.downloadUrl || '#',
       hasPdf: Boolean(book.hasPdf),
+      isPaid: Boolean(book.isPaid),
+      price: book.price || '',
       featured: Boolean(book.featured),
     });
     return book;
@@ -428,6 +457,8 @@ class DataStore {
       description: patch.description ?? cur.description,
       downloadUrl: patch.downloadUrl ?? cur.downloadUrl,
       hasPdf: patch.hasPdf ?? cur.hasPdf,
+      isPaid: patch.isPaid ?? Boolean(cur.isPaid),
+      price: patch.price !== undefined ? patch.price : (cur.price || undefined),
       featured: patch.featured ?? cur.featured,
     };
     await pg.db
@@ -444,6 +475,8 @@ class DataStore {
         description: next.description,
         downloadUrl: next.downloadUrl || '#',
         hasPdf: Boolean(next.hasPdf),
+        isPaid: Boolean(next.isPaid),
+        price: next.price || '',
         featured: Boolean(next.featured),
       })
       .where(eq(schema.books.id, id));
@@ -1145,6 +1178,173 @@ class DataStore {
       schedule,
       questions,
     };
+  }
+
+  // ==================== BULK ADMIN ACTIONS ====================
+  async batchAction(params: {
+    entity: 'books' | 'audios' | 'poems' | 'articles' | 'questions';
+    action: 'delete' | 'update';
+    ids: string[];
+    patch?: {
+      status?: string;
+      category?: string;
+      featured?: boolean;
+      isPaid?: boolean;
+      price?: string;
+      levelId?: 'beginner' | 'intermediate' | 'advanced';
+      level?: string;
+      type?: string;
+    };
+  }): Promise<{ affected: number }> {
+    const ids = Array.from(new Set(params.ids.map((id) => String(id).trim()).filter(Boolean)));
+    if (ids.length === 0) return { affected: 0 };
+
+    const pg = getPg();
+    if (!pg) {
+      const cache = this.jsonCache || this.loadJsonFallback();
+      const idSet = new Set(ids);
+      let affected = 0;
+
+      if (params.action === 'delete') {
+        if (params.entity === 'books') {
+          const before = cache.books.length;
+          cache.books = cache.books.filter((b) => !idSet.has(b.id));
+          affected = before - cache.books.length;
+        } else if (params.entity === 'audios') {
+          const before = cache.audios.length;
+          cache.audios = cache.audios.filter((a) => !idSet.has(a.id));
+          affected = before - cache.audios.length;
+        } else if (params.entity === 'poems') {
+          const before = cache.poems.length;
+          cache.poems = cache.poems.filter((p) => !idSet.has(p.id));
+          affected = before - cache.poems.length;
+        } else if (params.entity === 'articles') {
+          const before = cache.articles.length;
+          cache.articles = cache.articles.filter((a) => !idSet.has(a.id));
+          affected = before - cache.articles.length;
+        } else if (params.entity === 'questions') {
+          const before = cache.questions.length;
+          cache.questions = cache.questions.filter((q) => !idSet.has(q.id));
+          affected = before - cache.questions.length;
+        }
+        this.saveJsonFallback();
+        return { affected };
+      }
+
+      const patch = params.patch || {};
+      if (params.entity === 'books') {
+        cache.books = cache.books.map((b) => {
+          if (!idSet.has(b.id)) return b;
+          affected++;
+          return {
+            ...b,
+            ...(patch.status ? { status: patch.status as Book['status'] } : {}),
+            ...(patch.category ? { category: patch.category as Book['category'] } : {}),
+            ...(patch.featured !== undefined ? { featured: Boolean(patch.featured) } : {}),
+            ...(patch.isPaid !== undefined ? { isPaid: Boolean(patch.isPaid) } : {}),
+            ...(patch.price !== undefined ? { price: String(patch.price) } : {}),
+          };
+        });
+      } else if (params.entity === 'audios') {
+        cache.audios = cache.audios.map((a) => {
+          if (!idSet.has(a.id)) return a;
+          affected++;
+          return {
+            ...a,
+            ...(patch.status ? { status: patch.status as AudioCourse['status'] } : {}),
+            ...(patch.category ? { category: patch.category as AudioCourse['category'] } : {}),
+            ...(patch.levelId ? { levelId: patch.levelId } : {}),
+            ...(patch.level ? { level: patch.level } : {}),
+          };
+        });
+      } else if (params.entity === 'poems') {
+        cache.poems = cache.poems.map((p) => {
+          if (!idSet.has(p.id)) return p;
+          affected++;
+          return {
+            ...p,
+            ...(patch.category ? { category: patch.category } : {}),
+          };
+        });
+      } else if (params.entity === 'articles') {
+        cache.articles = cache.articles.map((a) => {
+          if (!idSet.has(a.id)) return a;
+          affected++;
+          return {
+            ...a,
+            ...(patch.category ? { category: patch.category as Article['category'] } : {}),
+            ...(patch.type ? { type: patch.type as Article['type'] } : {}),
+          };
+        });
+      }
+      this.saveJsonFallback();
+      return { affected };
+    }
+
+    if (params.action === 'delete') {
+      if (params.entity === 'books') {
+        const res = await pg.db.delete(schema.books).where(inArray(schema.books.id, ids)).returning({ id: schema.books.id });
+        return { affected: res.length };
+      }
+      if (params.entity === 'audios') {
+        const res = await pg.db.delete(schema.audioCourses).where(inArray(schema.audioCourses.id, ids)).returning({ id: schema.audioCourses.id });
+        return { affected: res.length };
+      }
+      if (params.entity === 'poems') {
+        const res = await pg.db.delete(schema.poems).where(inArray(schema.poems.id, ids)).returning({ id: schema.poems.id });
+        return { affected: res.length };
+      }
+      if (params.entity === 'articles') {
+        const res = await pg.db.delete(schema.articles).where(inArray(schema.articles.id, ids)).returning({ id: schema.articles.id });
+        return { affected: res.length };
+      }
+      if (params.entity === 'questions') {
+        const res = await pg.db.delete(schema.studentQuestions).where(inArray(schema.studentQuestions.id, ids)).returning({ id: schema.studentQuestions.id });
+        return { affected: res.length };
+      }
+      return { affected: 0 };
+    }
+
+    const patch = params.patch || {};
+    if (params.entity === 'books') {
+      const setPayload: Partial<typeof schema.books.$inferInsert> = {};
+      if (patch.status) setPayload.status = patch.status;
+      if (patch.category) setPayload.category = patch.category;
+      if (patch.featured !== undefined) setPayload.featured = Boolean(patch.featured);
+      if (patch.isPaid !== undefined) setPayload.isPaid = Boolean(patch.isPaid);
+      if (patch.price !== undefined) setPayload.price = String(patch.price);
+      if (Object.keys(setPayload).length === 0) return { affected: 0 };
+      const res = await pg.db.update(schema.books).set(setPayload).where(inArray(schema.books.id, ids)).returning({ id: schema.books.id });
+      return { affected: res.length };
+    }
+
+    if (params.entity === 'audios') {
+      const setPayload: Partial<typeof schema.audioCourses.$inferInsert> = {};
+      if (patch.status) setPayload.status = patch.status;
+      if (patch.category) setPayload.category = patch.category;
+      if (patch.levelId) setPayload.levelId = patch.levelId;
+      if (patch.level) setPayload.level = patch.level;
+      if (Object.keys(setPayload).length === 0) return { affected: 0 };
+      const res = await pg.db.update(schema.audioCourses).set(setPayload).where(inArray(schema.audioCourses.id, ids)).returning({ id: schema.audioCourses.id });
+      return { affected: res.length };
+    }
+
+    if (params.entity === 'poems') {
+      if (!patch.category) return { affected: 0 };
+      const res = await pg.db.update(schema.poems).set({ category: patch.category }).where(inArray(schema.poems.id, ids)).returning({ id: schema.poems.id });
+      return { affected: res.length };
+    }
+
+    if (params.entity === 'articles') {
+      const setPayload: Partial<typeof schema.articles.$inferInsert> = {};
+      if (patch.category) setPayload.category = patch.category;
+      if (patch.type) setPayload.type = patch.type;
+      if (Object.keys(setPayload).length === 0) return { affected: 0 };
+      const res = await pg.db.update(schema.articles).set(setPayload).where(inArray(schema.articles.id, ids)).returning({ id: schema.articles.id });
+      return { affected: res.length };
+    }
+
+    return { affected: 0 };
   }
 
   async resetFromSeedFile() {

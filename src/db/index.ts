@@ -75,9 +75,14 @@ async function ensureSchemaDDL(pgPool: Pool): Promise<void> {
       description TEXT NOT NULL DEFAULT '',
       download_url TEXT NOT NULL DEFAULT '#',
       has_pdf BOOLEAN NOT NULL DEFAULT FALSE,
+      is_paid BOOLEAN NOT NULL DEFAULT FALSE,
+      price TEXT NOT NULL DEFAULT '',
       featured BOOLEAN NOT NULL DEFAULT FALSE,
       created_at TIMESTAMP NOT NULL DEFAULT NOW()
     );
+
+    ALTER TABLE books ADD COLUMN IF NOT EXISTS is_paid BOOLEAN NOT NULL DEFAULT FALSE;
+    ALTER TABLE books ADD COLUMN IF NOT EXISTS price TEXT NOT NULL DEFAULT '';
 
     CREATE TABLE IF NOT EXISTS audio_courses (
       id TEXT PRIMARY KEY,
@@ -214,6 +219,8 @@ async function seedIfEmpty(pgPool: Pool, orm: DbInstance): Promise<void> {
             description: b.description || '',
             downloadUrl: b.downloadUrl || '#',
             hasPdf: Boolean(b.hasPdf),
+            isPaid: Boolean(b.isPaid),
+            price: b.price || '',
             featured: Boolean(b.featured),
           })
           .onConflictDoNothing({ target: schema.books.id });
@@ -341,33 +348,67 @@ async function seedIfEmpty(pgPool: Pool, orm: DbInstance): Promise<void> {
   }
 }
 
+async function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 export async function initDatabase(): Promise<{ engine: 'postgres' | 'json'; pgConfigured: boolean }> {
+  const isProduction = process.env.NODE_ENV === 'production';
   const configured = hasPostgresConfig();
+
   if (!configured) {
+    if (isProduction) {
+      throw new Error(
+        '[PostgreSQL] FATAL: NODE_ENV=production requires PostgreSQL (DATABASE_URL or POSTGRES_HOST / PGHOST). JSON fallback is disabled in production.'
+      );
+    }
     pgAvailable = false;
-    console.log('[Storage] No DATABASE_URL/PGHOST configured — running with JSON store (server/data/db.json).');
+    console.log('[Storage] Development mode without PostgreSQL — using local JSON store (server/data/db.json).');
     return { engine: 'json', pgConfigured: false };
   }
 
-  try {
-    pool = new Pool(buildPoolConfig());
-    await pool.query('SELECT 1');
-    await ensureSchemaDDL(pool);
-    db = drizzle(pool, { schema });
-    await seedIfEmpty(pool, db);
-    pgAvailable = true;
-    console.log('[Storage] Connected to PostgreSQL and verified schema + catalog seed.');
-    return { engine: 'postgres', pgConfigured: true };
-  } catch (err) {
-    console.warn('[Storage] PostgreSQL connection unavailable, falling back to JSON store:', (err as Error).message);
-    if (pool) {
-      await pool.end().catch(() => {});
-      pool = null;
+  const maxAttempts = isProduction ? 6 : 1;
+  let lastError: Error | null = null;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      pool = new Pool(buildPoolConfig());
+      await pool.query('SELECT 1');
+      await ensureSchemaDDL(pool);
+      db = drizzle(pool, { schema });
+      await seedIfEmpty(pool, db);
+      pgAvailable = true;
+      console.log('[Storage] Connected to PostgreSQL and verified schema + catalog seed.');
+      return { engine: 'postgres', pgConfigured: true };
+    } catch (err) {
+      lastError = err as Error;
+      if (pool) {
+        await pool.end().catch(() => {});
+        pool = null;
+      }
+      db = null;
+      pgAvailable = false;
+
+      if (isProduction && attempt < maxAttempts) {
+        console.warn(
+          `[PostgreSQL] Connection attempt ${attempt}/${maxAttempts} failed (${lastError.message}). Retrying in 2s...`
+        );
+        await sleep(2000);
+      }
     }
-    db = null;
-    pgAvailable = false;
-    return { engine: 'json', pgConfigured: true };
   }
+
+  if (isProduction) {
+    throw new Error(
+      `[PostgreSQL] FATAL: Could not connect to PostgreSQL in production (${lastError?.message || 'unknown error'}). JSON fallback is disabled.`
+    );
+  }
+
+  console.warn(
+    '[Storage] Development PostgreSQL unavailable, falling back to local JSON store:',
+    lastError?.message
+  );
+  return { engine: 'json', pgConfigured: true };
 }
 
 export function getPg(): { db: DbInstance; pool: Pool } | null {

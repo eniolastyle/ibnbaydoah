@@ -7,6 +7,8 @@ interface PaginationProps {
   totalItems: number;
   pageSize: number;
   onPageChange: (page: number) => void;
+  pageSizeOptions?: number[];
+  onPageSizeChange?: (size: number) => void;
   className?: string;
 }
 
@@ -15,16 +17,21 @@ export const Pagination: React.FC<PaginationProps> = ({
   totalItems,
   pageSize,
   onPageChange,
+  pageSizeOptions,
+  onPageSizeChange,
   className = ''
 }) => {
   const { lang, dir } = useLanguage();
-  const totalPages = Math.max(1, Math.ceil(totalItems / pageSize));
+  if (totalItems === 0) return null;
 
-  if (totalPages <= 1) return null;
+  const effectiveSize = pageSize <= 0 ? totalItems : pageSize;
+  const totalPages = Math.max(1, Math.ceil(totalItems / effectiveSize));
+
+  if (totalPages <= 1 && !onPageSizeChange) return null;
 
   const safePage = Math.min(Math.max(1, currentPage), totalPages);
-  const startItem = (safePage - 1) * pageSize + 1;
-  const endItem = Math.min(safePage * pageSize, totalItems);
+  const startItem = (safePage - 1) * effectiveSize + 1;
+  const endItem = Math.min(safePage * effectiveSize, totalItems);
 
   // Build smart page numbers array with ellipses
   const getPageNumbers = (): (number | 'ellipsis-left' | 'ellipsis-right')[] => {
@@ -59,75 +66,100 @@ export const Pagination: React.FC<PaginationProps> = ({
 
   const PrevIcon = dir === 'rtl' ? ChevronRight : ChevronLeft;
   const NextIcon = dir === 'rtl' ? ChevronLeft : ChevronRight;
+  const sizeOptions = pageSizeOptions || [10, 25, 50, 100];
 
   return (
     <div
-      className={`flex flex-col sm:flex-row items-center justify-between gap-4 pt-6 border-t border-[#E8DCC9] font-readex ${className}`}
+      className={`flex flex-col sm:flex-row items-center justify-between gap-4 pt-5 border-t border-[#E8DCC9] font-readex ${className}`}
     >
-      {/* Count indicator */}
-      <div className="text-xs text-[#8C6D3B] font-medium">
-        {lang === 'ar'
-          ? `عرض ${startItem}–${endItem} من أصل ${totalItems}`
-          : `Showing ${startItem}–${endItem} of ${totalItems}`}
+      {/* Count indicator + Optional Per-Page Selector */}
+      <div className="flex flex-wrap items-center justify-center sm:justify-start gap-3 text-xs text-[#8C6D3B] font-medium">
+        <span>
+          {lang === 'ar'
+            ? `عرض ${startItem}–${endItem} من أصل ${totalItems}`
+            : `Showing ${startItem}–${endItem} of ${totalItems}`}
+        </span>
+
+        {onPageSizeChange && (
+          <label className="inline-flex items-center gap-1.5 bg-white border border-[#E0D4C1] rounded-xl px-2.5 py-1 text-[#0F382C]">
+            <span className="text-[11px] text-[#8C6D3B]">
+              {lang === 'ar' ? 'لكل صفحة:' : 'Per page:'}
+            </span>
+            <select
+              value={pageSize}
+              onChange={(e) => onPageSizeChange(Number(e.target.value))}
+              className="bg-transparent font-latin font-bold text-xs text-[#0F382C] focus:outline-none cursor-pointer"
+            >
+              {sizeOptions.map((opt) => (
+                <option key={opt} value={opt}>
+                  {opt}
+                </option>
+              ))}
+              <option value={999999}>{lang === 'ar' ? 'الكل' : 'All'}</option>
+            </select>
+          </label>
+        )}
       </div>
 
       {/* Page buttons */}
-      <nav
-        aria-label={lang === 'ar' ? 'التنقل بين الصفحات' : 'Pagination'}
-        className="flex flex-wrap items-center justify-center gap-1.5"
-      >
-        <button
-          type="button"
-          onClick={() => handleSelect(safePage - 1)}
-          disabled={safePage === 1}
-          aria-label={lang === 'ar' ? 'الصفحة السابقة' : 'Previous page'}
-          className="min-w-[38px] h-9 px-2.5 rounded-xl border border-[#E0D4C1] bg-white text-[#0F382C] hover:bg-[#F4EFE6] disabled:opacity-40 disabled:pointer-events-none flex items-center justify-center gap-1 text-xs font-semibold transition"
+      {totalPages > 1 && (
+        <nav
+          aria-label={lang === 'ar' ? 'التنقل بين الصفحات' : 'Pagination'}
+          className="flex flex-wrap items-center justify-center gap-1.5"
         >
-          <PrevIcon className="w-4 h-4" />
-          <span className="hidden xs:inline">{lang === 'ar' ? 'السابق' : 'Prev'}</span>
-        </button>
+          <button
+            type="button"
+            onClick={() => handleSelect(safePage - 1)}
+            disabled={safePage === 1}
+            aria-label={lang === 'ar' ? 'الصفحة السابقة' : 'Previous page'}
+            className="min-w-[38px] h-9 px-2.5 rounded-xl border border-[#E0D4C1] bg-white text-[#0F382C] hover:bg-[#F4EFE6] disabled:opacity-40 disabled:pointer-events-none flex items-center justify-center gap-1 text-xs font-semibold transition"
+          >
+            <PrevIcon className="w-4 h-4" />
+            <span className="hidden xs:inline">{lang === 'ar' ? 'السابق' : 'Prev'}</span>
+          </button>
 
-        {getPageNumbers().map((item) => {
-          if (item === 'ellipsis-left' || item === 'ellipsis-right') {
+          {getPageNumbers().map((item) => {
+            if (item === 'ellipsis-left' || item === 'ellipsis-right') {
+              return (
+                <span
+                  key={item}
+                  className="px-2 text-xs text-[#A58455] select-none"
+                >
+                  ...
+                </span>
+              );
+            }
+
+            const isActive = item === safePage;
             return (
-              <span
+              <button
                 key={item}
-                className="px-2 text-xs text-[#A58455] select-none"
+                type="button"
+                onClick={() => handleSelect(item)}
+                aria-current={isActive ? 'page' : undefined}
+                className={`min-w-[38px] h-9 px-2.5 rounded-xl text-xs font-latin font-bold transition ${
+                  isActive
+                    ? 'bg-[#0F382C] text-white shadow-xs border border-[#0F382C]'
+                    : 'bg-white text-[#0F382C] border border-[#E0D4C1] hover:bg-[#F4EFE6]'
+                }`}
               >
-                ...
-              </span>
+                {item}
+              </button>
             );
-          }
+          })}
 
-          const isActive = item === safePage;
-          return (
-            <button
-              key={item}
-              type="button"
-              onClick={() => handleSelect(item)}
-              aria-current={isActive ? 'page' : undefined}
-              className={`min-w-[38px] h-9 px-2.5 rounded-xl text-xs font-latin font-bold transition ${
-                isActive
-                  ? 'bg-[#0F382C] text-white shadow-xs border border-[#0F382C]'
-                  : 'bg-white text-[#0F382C] border border-[#E0D4C1] hover:bg-[#F4EFE6]'
-              }`}
-            >
-              {item}
-            </button>
-          );
-        })}
-
-        <button
-          type="button"
-          onClick={() => handleSelect(safePage + 1)}
-          disabled={safePage === totalPages}
-          aria-label={lang === 'ar' ? 'الصفحة التالية' : 'Next page'}
-          className="min-w-[38px] h-9 px-2.5 rounded-xl border border-[#E0D4C1] bg-white text-[#0F382C] hover:bg-[#F4EFE6] disabled:opacity-40 disabled:pointer-events-none flex items-center justify-center gap-1 text-xs font-semibold transition"
-        >
-          <span className="hidden xs:inline">{lang === 'ar' ? 'التالي' : 'Next'}</span>
-          <NextIcon className="w-4 h-4" />
-        </button>
-      </nav>
+          <button
+            type="button"
+            onClick={() => handleSelect(safePage + 1)}
+            disabled={safePage === totalPages}
+            aria-label={lang === 'ar' ? 'الصفحة التالية' : 'Next page'}
+            className="min-w-[38px] h-9 px-2.5 rounded-xl border border-[#E0D4C1] bg-white text-[#0F382C] hover:bg-[#F4EFE6] disabled:opacity-40 disabled:pointer-events-none flex items-center justify-center gap-1 text-xs font-semibold transition"
+          >
+            <span className="hidden xs:inline">{lang === 'ar' ? 'التالي' : 'Next'}</span>
+            <NextIcon className="w-4 h-4" />
+          </button>
+        </nav>
+      )}
     </div>
   );
 };

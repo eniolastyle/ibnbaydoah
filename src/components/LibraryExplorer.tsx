@@ -11,7 +11,8 @@ import {
   Clock,
   Layers,
   Sparkles,
-  Info
+  Info,
+  ShoppingBag
 } from 'lucide-react';
 
 interface LibraryExplorerProps {
@@ -28,6 +29,7 @@ export const LibraryExplorer: React.FC<LibraryExplorerProps> = ({
   const { lang, t, translateCategory, translateStatus } = useLanguage();
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
   const [statusFilter, setStatusFilter] = useState<'all' | 'مطبوع' | 'مخطوط'>('all');
+  const [pricingFilter, setPricingFilter] = useState<'all' | 'free' | 'paid'>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [activeBook, setActiveBook] = useState<Book | null>(null);
   const [pdfNotice, setPdfNotice] = useState<string | null>(null);
@@ -36,13 +38,16 @@ export const LibraryExplorer: React.FC<LibraryExplorerProps> = ({
 
   useEffect(() => {
     setCurrentPage(1);
-  }, [selectedCategory, statusFilter, searchQuery, books.length]);
+  }, [selectedCategory, statusFilter, pricingFilter, searchQuery, books.length]);
 
   const filteredBooks = books.filter(book => {
     const matchesCategory =
       selectedCategory === 'all' || book.category === selectedCategory;
     const matchesStatus =
       statusFilter === 'all' || book.status === statusFilter;
+    const matchesPricing =
+      pricingFilter === 'all' ||
+      (pricingFilter === 'paid' ? Boolean(book.isPaid) : !book.isPaid);
     const matchesSearch =
       !searchQuery.trim() ||
       book.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -50,7 +55,7 @@ export const LibraryExplorer: React.FC<LibraryExplorerProps> = ({
       book.description.toLowerCase().includes(searchQuery.toLowerCase()) ||
       book.category.toLowerCase().includes(searchQuery.toLowerCase());
 
-    return matchesCategory && matchesStatus && matchesSearch;
+    return matchesCategory && matchesStatus && matchesPricing && matchesSearch;
   });
 
   const totalPages = Math.max(1, Math.ceil(filteredBooks.length / PAGE_SIZE));
@@ -60,11 +65,24 @@ export const LibraryExplorer: React.FC<LibraryExplorerProps> = ({
     safePage * PAGE_SIZE
   );
 
+  const sanitizedWhatsapp = (whatsappNumber || '').replace(/[^0-9]/g, '');
+
   const generateWhatsAppLink = (book: Book) => {
     const msg = encodeURIComponent(
       `As-Salāmu ‘alaykum wa Raḥmatullāhi wa Barakātuh, Ustādh Abu Sa'eed.\nI would like to inquire about your treatise: «${book.title}» (${book.category} - ${book.status}).\nMay Allah bless you and benefit through your knowledge.`
     );
-    return `https://wa.me/${whatsappNumber.replace(/[^0-9]/g, '')}?text=${msg}`;
+    return `https://wa.me/${sanitizedWhatsapp}?text=${msg}`;
+  };
+
+  const generateWhatsAppOrderLink = (book: Book) => {
+    const priceLineAr = book.price ? `\nالسعر الموضح: ${book.price}` : '';
+    const priceLineEn = book.price ? ` | Price: ${book.price}` : '';
+    const msg = encodeURIComponent(
+      lang === 'ar'
+        ? `السلام عليكم ورحمة الله وبركاته فضيلة الشيخ أبي سعيد ابن بيضاء،\nأرغب في طلب كتاب: «${book.title}» (${book.category} - ${book.status}).${priceLineAr}\nجزاكم الله خيراً ونفع بعلمكم، أرجو إفادتي بتفاصيل السداد والاستلام.`
+        : `As-Salāmu ‘alaykum wa Raḥmatullāhi wa Barakātuh,\nI would like to order the book: "${book.title}" (${translateCategory(book.category)} - ${translateStatus(book.status)}${priceLineEn}).\nPlease share payment and delivery details. BarakAllahu feekum.`
+    );
+    return `https://wa.me/${sanitizedWhatsapp}?text=${msg}`;
   };
 
   const getCategoryColor = (cat: string) => {
@@ -193,8 +211,43 @@ export const LibraryExplorer: React.FC<LibraryExplorerProps> = ({
             </div>
           </div>
 
-          <div className="text-xs text-[#8C6D3B] font-medium">
-            {t('showing_count')} {filteredBooks.length} {t('of_total')} {books.length} {t('books_unit')}
+          <div className="flex flex-wrap items-center gap-2 sm:gap-3">
+            <div className="flex items-center gap-1 rounded-xl border border-[#E0D4C1] bg-[#FDFBF7] p-1">
+              <button
+                onClick={() => setPricingFilter('all')}
+                className={`px-2.5 py-1.5 rounded-lg text-xs transition ${
+                  pricingFilter === 'all'
+                    ? 'bg-[#0F382C] text-white font-bold shadow-xs'
+                    : 'text-[#1E1E1E] hover:bg-[#F4EFE6]'
+                }`}
+              >
+                {t('all_pricing')}
+              </button>
+              <button
+                onClick={() => setPricingFilter('free')}
+                className={`px-2.5 py-1.5 rounded-lg text-xs transition ${
+                  pricingFilter === 'free'
+                    ? 'bg-emerald-700 text-white font-bold shadow-xs'
+                    : 'text-[#1E1E1E] hover:bg-[#F4EFE6]'
+                }`}
+              >
+                {t('free_book')}
+              </button>
+              <button
+                onClick={() => setPricingFilter('paid')}
+                className={`px-2.5 py-1.5 rounded-lg text-xs transition ${
+                  pricingFilter === 'paid'
+                    ? 'bg-[#C5A880] text-[#0F382C] font-bold shadow-xs'
+                    : 'text-[#1E1E1E] hover:bg-[#F4EFE6]'
+                }`}
+              >
+                {t('paid_book')}
+              </button>
+            </div>
+
+            <div className="text-xs text-[#8C6D3B] font-medium">
+              {t('showing_count')} {filteredBooks.length} {t('of_total')} {books.length} {t('books_unit')}
+            </div>
           </div>
         </div>
       </div>
@@ -249,15 +302,31 @@ export const LibraryExplorer: React.FC<LibraryExplorerProps> = ({
                       {translateCategory(book.category)}
                     </span>
 
-                    <span
-                      className={`text-[11px] font-readex font-bold px-2 py-0.5 rounded border shrink-0 ${
-                        isPrinted
-                          ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
-                          : 'bg-amber-100 text-amber-800 border-amber-300'
-                      }`}
-                    >
-                      {translateStatus(book.status)}
-                    </span>
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      <span
+                        className={`text-[11px] font-readex font-bold px-2 py-0.5 rounded border ${
+                          book.isPaid
+                            ? 'bg-[#FAF3E3] text-[#8C5B15] border-[#C5A880]'
+                            : 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                        }`}
+                      >
+                        {book.isPaid
+                          ? book.price
+                            ? `${t('paid_book')} • ${book.price}`
+                            : t('paid_book')
+                          : t('free_book')}
+                      </span>
+
+                      <span
+                        className={`text-[11px] font-readex font-bold px-2 py-0.5 rounded border ${
+                          isPrinted
+                            ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
+                            : 'bg-amber-100 text-amber-800 border-amber-300'
+                        }`}
+                      >
+                        {translateStatus(book.status)}
+                      </span>
+                    </div>
                   </div>
 
                   {/* Title & Subtitle */}
@@ -306,7 +375,17 @@ export const LibraryExplorer: React.FC<LibraryExplorerProps> = ({
                   </button>
 
                   <div className="flex items-center gap-1.5">
-                    {book.hasPdf ? (
+                    {book.isPaid ? (
+                      <a
+                        href={generateWhatsAppOrderLink(book)}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="px-3.5 py-1.5 rounded-lg bg-[#C5A880] text-[#0F382C] hover:bg-[#DFC7A5] text-xs font-readex font-bold flex items-center gap-1.5 shadow-sm transition"
+                      >
+                        <ShoppingBag className="w-3.5 h-3.5" />
+                        <span>{t('order_book')}</span>
+                      </a>
+                    ) : book.hasPdf ? (
                       <a
                         href={book.downloadUrl || '#'}
                         onClick={e => {
@@ -360,9 +439,24 @@ export const LibraryExplorer: React.FC<LibraryExplorerProps> = ({
           <div className="bg-[#FDFBF7] rounded-3xl max-w-2xl w-full border-2 border-[#C5A880] shadow-2xl overflow-hidden p-6 sm:p-8">
             <div className="flex items-start justify-between gap-4 mb-4">
               <div>
-                <span className="text-xs font-readex px-2.5 py-1 rounded bg-[#0F382C]/10 text-[#0F382C] border border-[#C5A880]/40 font-semibold">
-                  {translateCategory(activeBook.category)} • {translateStatus(activeBook.status)}
-                </span>
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-xs font-readex px-2.5 py-1 rounded bg-[#0F382C]/10 text-[#0F382C] border border-[#C5A880]/40 font-semibold">
+                    {translateCategory(activeBook.category)} • {translateStatus(activeBook.status)}
+                  </span>
+                  <span
+                    className={`text-xs font-readex px-2.5 py-1 rounded border font-bold ${
+                      activeBook.isPaid
+                        ? 'bg-[#FAF3E3] text-[#8C5B15] border-[#C5A880]'
+                        : 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                    }`}
+                  >
+                    {activeBook.isPaid
+                      ? activeBook.price
+                        ? `${t('paid_book')} • ${activeBook.price}`
+                        : t('paid_book')
+                      : t('free_book')}
+                  </span>
+                </div>
                 <h3 className="font-amiri font-bold text-2xl sm:text-3xl text-[#0F382C] mt-2">
                   {activeBook.title}
                 </h3>
@@ -408,15 +502,49 @@ export const LibraryExplorer: React.FC<LibraryExplorerProps> = ({
               >
                 {t('close_modal')}
               </button>
-              <a
-                href={generateWhatsAppLink(activeBook)}
-                target="_blank"
-                rel="noreferrer"
-                className="px-4 py-2.5 rounded-xl bg-[#0F382C] text-white flex items-center gap-1.5 shadow hover:bg-[#164E3D]"
-              >
-                <MessageCircle className="w-4 h-4 text-[#DFC7A5]" />
-                <span>{t('whatsapp_request')}</span>
-              </a>
+              {activeBook.isPaid ? (
+                <a
+                  href={generateWhatsAppOrderLink(activeBook)}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="px-5 py-2.5 rounded-xl bg-[#C5A880] text-[#0F382C] font-bold flex items-center gap-1.5 shadow hover:bg-[#DFC7A5]"
+                >
+                  <ShoppingBag className="w-4 h-4" />
+                  <span>{t('order_via_whatsapp')}</span>
+                </a>
+              ) : (
+                <>
+                  {activeBook.hasPdf && (
+                    <a
+                      href={activeBook.downloadUrl || '#'}
+                      onClick={e => {
+                        if (!activeBook.downloadUrl || activeBook.downloadUrl === '#') {
+                          e.preventDefault();
+                          setPdfNotice(
+                            lang === 'ar'
+                              ? `سيتم إتاحة النسخة الرقمية لكتاب «${activeBook.title}» قريباً بإذن الله`
+                              : `The digital PDF edition for "${activeBook.title}" will be released shortly inshā'Allāh`
+                          );
+                          setActiveBook(null);
+                        }
+                      }}
+                      className="px-4 py-2.5 rounded-xl bg-[#0F382C] text-white flex items-center gap-1.5 shadow hover:bg-[#164E3D]"
+                    >
+                      <Download className="w-4 h-4 text-[#DFC7A5]" />
+                      <span>{t('download_pdf')}</span>
+                    </a>
+                  )}
+                  <a
+                    href={generateWhatsAppLink(activeBook)}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="px-4 py-2.5 rounded-xl bg-[#F4EFE6] text-[#0F382C] border border-[#C5A880]/50 flex items-center gap-1.5 hover:bg-[#C5A880]/20"
+                  >
+                    <MessageCircle className="w-4 h-4 text-emerald-700" />
+                    <span>{t('whatsapp_request')}</span>
+                  </a>
+                </>
+              )}
             </div>
           </div>
         </div>

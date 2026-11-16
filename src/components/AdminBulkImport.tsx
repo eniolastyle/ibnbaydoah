@@ -364,8 +364,8 @@ export const AdminBulkImport: React.FC<AdminBulkImportProps> = ({
               {status?.storage.engine === 'postgres'
                 ? 'PostgreSQL + Drizzle ORM'
                 : lang === 'ar'
-                ? 'تخزين JSON محلي (احتياطي)'
-                : 'Local JSON Fallback'}
+                ? 'وضع التطوير المحلي (PostgreSQL إلزامي في الإنتاج)'
+                : 'Dev JSON Mode (PostgreSQL Required in Prod)'}
             </span>
           </div>
           <div
