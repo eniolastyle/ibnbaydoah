@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { Article } from '../types';
 import { useLanguage } from '../context/LanguageContext';
 import { Pagination } from './Pagination';
@@ -11,36 +11,91 @@ import {
   Check,
   BookOpen,
   ArrowRight,
-  Share2
+  Share2,
+  Eye,
+  Clock,
+  Bookmark,
+  Heart,
+  Sliders,
+  MessageCircle,
+  Sparkles,
+  TrendingUp
 } from 'lucide-react';
 
 interface ArticlesSectionProps {
   articles: Article[];
   initialArticleId?: string | null;
   onSelectArticle?: (articleId: string | null) => void;
+  onArticleViewed?: (articleId: string, views: number) => void;
+}
+
+const SAVED_STORAGE_KEY = 'ibn_baydoah_saved_articles';
+const LIKED_STORAGE_KEY = 'ibn_baydoah_liked_articles';
+const VIEWED_SESSION_KEY = 'ibn_baydoah_viewed_articles';
+const FONT_STORAGE_KEY = 'ibn_baydoah_article_font';
+
+function readStringArray(storage: Storage | undefined, key: string): string[] {
+  if (!storage) return [];
+  try {
+    const raw = storage.getItem(key);
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? parsed.map(String) : [];
+  } catch {
+    return [];
+  }
+}
+
+function estimateReadingMinutes(content: string): number {
+  const words = (content || '')
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean).length;
+  return Math.max(1, Math.ceil(words / 180));
 }
 
 export const ArticlesSection: React.FC<ArticlesSectionProps> = ({
   articles,
   initialArticleId = null,
-  onSelectArticle
+  onSelectArticle,
+  onArticleViewed
 }) => {
   const { lang, t, translateCategory, translateArticleType } = useLanguage();
   const [selectedType, setSelectedType] = useState<string>('all');
+  const [selectedTag, setSelectedTag] = useState<string | null>(null);
+  const [showSavedOnly, setShowSavedOnly] = useState(false);
+  const [sortBy, setSortBy] = useState<'latest' | 'popular'>('latest');
   const [searchQuery, setSearchQuery] = useState('');
   const [readingArticle, setReadingArticle] = useState<Article | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [copiedLinkId, setCopiedLinkId] = useState<string | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
+  const [readProgress, setReadProgress] = useState(0);
+
+  const [fontSize, setFontSize] = useState<'normal' | 'large' | 'xlarge'>(() => {
+    if (typeof window === 'undefined') return 'normal';
+    const saved = localStorage.getItem(FONT_STORAGE_KEY);
+    return saved === 'large' || saved === 'xlarge' ? saved : 'normal';
+  });
+
+  const [savedIds, setSavedIds] = useState<string[]>(() =>
+    typeof window !== 'undefined' ? readStringArray(localStorage, SAVED_STORAGE_KEY) : []
+  );
+  const [likedIds, setLikedIds] = useState<string[]>(() =>
+    typeof window !== 'undefined' ? readStringArray(localStorage, LIKED_STORAGE_KEY) : []
+  );
+
+  const viewedInMountRef = useRef<Set<string>>(new Set());
+  const articleBodyRef = useRef<HTMLDivElement | null>(null);
   const PAGE_SIZE = 4;
 
   useEffect(() => {
     setCurrentPage(1);
-  }, [selectedType, searchQuery, articles.length]);
+  }, [selectedType, selectedTag, showSavedOnly, sortBy, searchQuery, articles.length]);
 
   useEffect(() => {
     if (!initialArticleId) {
       setReadingArticle(null);
+      setReadProgress(0);
       return;
     }
     const found = articles.find(a => a.id === initialArticleId);
@@ -48,6 +103,112 @@ export const ArticlesSection: React.FC<ArticlesSectionProps> = ({
       setReadingArticle(found);
     }
   }, [initialArticleId, articles]);
+
+  // Trigger live backend view tracking once per session when opening an article
+  useEffect(() => {
+    if (!readingArticle) return;
+    const artId = readingArticle.id;
+    const sessionViewed =
+      typeof window !== 'undefined' ? readStringArray(sessionStorage, VIEWED_SESSION_KEY) : [];
+
+    if (viewedInMountRef.current.has(artId) || sessionViewed.includes(artId)) {
+      return;
+    }
+
+    viewedInMountRef.current.add(artId);
+    if (typeof window !== 'undefined') {
+      try {
+        sessionStorage.setItem(VIEWED_SESSION_KEY, JSON.stringify([...sessionViewed, artId]));
+      } catch {
+        // ignore storage quota errors
+      }
+    }
+
+    let cancelled = false;
+    fetch(`/api/articles/${encodeURIComponent(artId)}/view`, { method: 'POST' })
+      .then(res => (res.ok ? res.json() : null))
+      .then(json => {
+        if (cancelled || !json?.success || typeof json.data?.views !== 'number') return;
+        const nextViews = json.data.views;
+        setReadingArticle(prev => (prev && prev.id === artId ? { ...prev, views: nextViews } : prev));
+        onArticleViewed?.(artId, nextViews);
+      })
+      .catch(() => {
+        // Non-blocking view telemetry failure
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [readingArticle?.id]);
+
+  // Track scroll reading progress within the open article view
+  useEffect(() => {
+    if (!readingArticle) {
+      setReadProgress(0);
+      return;
+    }
+
+    const updateProgress = () => {
+      const el = articleBodyRef.current;
+      if (!el) return;
+      const rect = el.getBoundingClientRect();
+      const total = Math.max(1, el.offsetHeight - window.innerHeight * 0.55);
+      const passed = Math.max(0, window.innerHeight * 0.35 - rect.top);
+      const pct = Math.min(100, Math.max(0, Math.round((passed / total) * 100)));
+      setReadProgress(pct);
+    };
+
+    updateProgress();
+    window.addEventListener('scroll', updateProgress, { passive: true });
+    window.addEventListener('resize', updateProgress, { passive: true });
+    return () => {
+      window.removeEventListener('scroll', updateProgress);
+      window.removeEventListener('resize', updateProgress);
+    };
+  }, [readingArticle?.id, fontSize]);
+
+  const handleChangeFontSize = (next: 'normal' | 'large' | 'xlarge') => {
+    setFontSize(next);
+    if (typeof window !== 'undefined') {
+      try {
+        localStorage.setItem(FONT_STORAGE_KEY, next);
+      } catch {
+        // ignore
+      }
+    }
+  };
+
+  const toggleSaveArticle = (id: string, e?: React.MouseEvent) => {
+    e?.stopPropagation();
+    setSavedIds(prev => {
+      const exists = prev.includes(id);
+      const next = exists ? prev.filter(item => item !== id) : [id, ...prev];
+      if (typeof window !== 'undefined') {
+        try {
+          localStorage.setItem(SAVED_STORAGE_KEY, JSON.stringify(next));
+        } catch {
+          // ignore
+        }
+      }
+      return next;
+    });
+  };
+
+  const toggleLikeArticle = (id: string) => {
+    setLikedIds(prev => {
+      const exists = prev.includes(id);
+      const next = exists ? prev.filter(item => item !== id) : [id, ...prev];
+      if (typeof window !== 'undefined') {
+        try {
+          localStorage.setItem(LIKED_STORAGE_KEY, JSON.stringify(next));
+        } catch {
+          // ignore
+        }
+      }
+      return next;
+    });
+  };
 
   const handleOpenArticle = (art: Article) => {
     setReadingArticle(art);
@@ -69,17 +230,42 @@ export const ArticlesSection: React.FC<ArticlesSectionProps> = ({
     }
   };
 
-  const filteredArticles = articles.filter(art => {
-    const matchesType = selectedType === 'all' || art.type === selectedType;
-    const matchesSearch =
-      !searchQuery.trim() ||
-      art.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      art.summary.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      art.content.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      art.tags.some(tag => tag.toLowerCase().includes(searchQuery.toLowerCase()));
+  const getWhatsAppShareHref = (art: Article) => {
+    const shareUrl = getShareableUrl({ tab: 'articles', itemId: art.id });
+    const msg =
+      lang === 'ar'
+        ? `فائدة علمية بعنوان «${art.title}» للشيخ أبي سعيد ابن بيضاء:\n${shareUrl}`
+        : `Read "${art.title}" by Ustādh Abu Sa'eed Ibn Baydoah:\n${shareUrl}`;
+    return `https://wa.me/?text=${encodeURIComponent(msg)}`;
+  };
 
-    return matchesType && matchesSearch;
-  });
+  const handleCopyContent = (art: Article) => {
+    const text = `${art.title}\n\n${art.content}\n\n[${t('written_by_attribution')} - ${art.date}]`;
+    navigator.clipboard.writeText(text);
+    setCopiedId(art.id);
+    setTimeout(() => setCopiedId(null), 2500);
+  };
+
+  const filteredArticles = useMemo(() => {
+    const filtered = articles.filter(art => {
+      const matchesType = selectedType === 'all' || art.type === selectedType;
+      const matchesSaved = !showSavedOnly || savedIds.includes(art.id);
+      const matchesTag = !selectedTag || art.tags.includes(selectedTag);
+      const matchesSearch =
+        !searchQuery.trim() ||
+        art.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        art.summary.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        art.content.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        art.tags.some(tag => tag.toLowerCase().includes(searchQuery.toLowerCase()));
+
+      return matchesType && matchesSaved && matchesTag && matchesSearch;
+    });
+
+    if (sortBy === 'popular') {
+      return [...filtered].sort((a, b) => (b.views || 0) - (a.views || 0));
+    }
+    return filtered;
+  }, [articles, selectedType, showSavedOnly, savedIds, selectedTag, searchQuery, sortBy]);
 
   const totalPages = Math.max(1, Math.ceil(filteredArticles.length / PAGE_SIZE));
   const safePage = Math.min(currentPage, totalPages);
@@ -88,11 +274,31 @@ export const ArticlesSection: React.FC<ArticlesSectionProps> = ({
     safePage * PAGE_SIZE
   );
 
-  const handleCopyContent = (art: Article) => {
-    const text = `${art.title}\n\n${art.content}\n\n[${t('written_by_attribution')} - ${art.date}]`;
-    navigator.clipboard.writeText(text);
-    setCopiedId(art.id);
-    setTimeout(() => setCopiedId(null), 2500);
+  const relatedArticles = useMemo(() => {
+    if (!readingArticle) return [];
+    const currentTags = new Set(readingArticle.tags || []);
+    return articles
+      .filter(a => a.id !== readingArticle.id)
+      .map(a => {
+        const overlap = (a.tags || []).filter(tag => currentTags.has(tag)).length;
+        const sameCat = a.category === readingArticle.category ? 2 : 0;
+        const sameType = a.type === readingArticle.type ? 1 : 0;
+        return { article: a, score: overlap * 3 + sameCat + sameType };
+      })
+      .sort((a, b) => b.score - a.score || (b.article.views || 0) - (a.article.views || 0))
+      .slice(0, 2)
+      .map(entry => entry.article);
+  }, [articles, readingArticle]);
+
+  const getBodyFontClass = () => {
+    switch (fontSize) {
+      case 'large':
+        return 'text-lg sm:text-xl leading-[2.15]';
+      case 'xlarge':
+        return 'text-xl sm:text-2xl leading-[2.3]';
+      default:
+        return 'text-base sm:text-lg leading-loose';
+    }
   };
 
   return (
@@ -116,262 +322,531 @@ export const ArticlesSection: React.FC<ArticlesSectionProps> = ({
 
       {/* Full Reading View if an article is open */}
       {readingArticle ? (
-        <div className="bg-white rounded-3xl border border-[#E8DCC9] shadow-xl p-8 sm:p-12 space-y-8">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <button
-              onClick={handleCloseArticle}
-              className="inline-flex items-center gap-2 text-xs font-readex font-bold text-[#0F382C] hover:text-[#164E3D] px-3 py-1.5 rounded-lg bg-[#F4EFE6]"
-            >
-              <ArrowRight className="w-4 h-4 rtl:rotate-0 ltr:rotate-180" />
-              <span>{t('back_to_articles')}</span>
-            </button>
+        <div
+          ref={articleBodyRef}
+          className="bg-white rounded-3xl border border-[#E8DCC9] shadow-xl overflow-hidden"
+        >
+          {/* Sticky Top Reading Progress Bar */}
+          <div className="sticky top-0 z-20 bg-[#FAF6EE]/95 backdrop-blur-xs border-b border-[#E8DCC9]">
+            <div className="h-1 w-full bg-[#E8DCC9]/60">
+              <div
+                className="h-full bg-gradient-to-r from-[#0F382C] via-[#164E3D] to-[#C5A880] transition-all duration-150"
+                style={{ width: `${readProgress}%` }}
+              />
+            </div>
 
-            <button
-              type="button"
-              onClick={() => handleShareArticle(readingArticle)}
-              className="inline-flex items-center gap-1.5 text-xs font-readex font-semibold text-[#0F382C] hover:bg-[#F4EFE6] px-3 py-1.5 rounded-lg border border-[#E0D4C1] transition"
-            >
-              {copiedLinkId === readingArticle.id ? (
-                <>
-                  <Check className="w-3.5 h-3.5 text-emerald-600" />
-                  <span className="text-emerald-700">{t('link_copied')}</span>
-                </>
-              ) : (
-                <>
-                  <Share2 className="w-3.5 h-3.5 text-[#A58455]" />
-                  <span>{t('share_article')}</span>
-                </>
-              )}
-            </button>
+            <div className="px-6 sm:px-10 py-3.5 flex flex-wrap items-center justify-between gap-3">
+              <button
+                onClick={handleCloseArticle}
+                className="inline-flex items-center gap-2 text-xs font-readex font-bold text-[#0F382C] hover:text-[#164E3D] px-3 py-1.5 rounded-lg bg-white border border-[#E0D4C1]"
+              >
+                <ArrowRight className="w-4 h-4 rtl:rotate-0 ltr:rotate-180" />
+                <span>{t('back_to_articles')}</span>
+              </button>
+
+              <div className="flex flex-wrap items-center gap-2">
+                {/* Font Size Selector */}
+                <div className="inline-flex items-center gap-1 rounded-lg border border-[#E0D4C1] bg-white p-0.5 font-readex">
+                  <Sliders className="w-3.5 h-3.5 text-[#A58455] mx-1.5" />
+                  <button
+                    type="button"
+                    onClick={() => handleChangeFontSize('normal')}
+                    className={`px-2 py-1 text-[11px] rounded transition ${
+                      fontSize === 'normal'
+                        ? 'bg-[#0F382C] text-white font-bold'
+                        : 'text-[#1E1E1E] hover:bg-[#F4EFE6]'
+                    }`}
+                  >
+                    {t('font_normal')}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleChangeFontSize('large')}
+                    className={`px-2 py-1 text-[11px] rounded transition ${
+                      fontSize === 'large'
+                        ? 'bg-[#0F382C] text-white font-bold'
+                        : 'text-[#1E1E1E] hover:bg-[#F4EFE6]'
+                    }`}
+                  >
+                    {t('font_large')}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleChangeFontSize('xlarge')}
+                    className={`px-2 py-1 text-[11px] rounded transition ${
+                      fontSize === 'xlarge'
+                        ? 'bg-[#0F382C] text-white font-bold'
+                        : 'text-[#1E1E1E] hover:bg-[#F4EFE6]'
+                    }`}
+                  >
+                    {t('font_grand')}
+                  </button>
+                </div>
+
+                {/* Bookmark Toggle */}
+                <button
+                  type="button"
+                  onClick={() => toggleSaveArticle(readingArticle.id)}
+                  className={`inline-flex items-center gap-1.5 text-xs font-readex font-semibold px-3 py-1.5 rounded-lg border transition ${
+                    savedIds.includes(readingArticle.id)
+                      ? 'bg-[#FAF3E3] border-[#C5A880] text-[#8C5B15]'
+                      : 'bg-white border-[#E0D4C1] text-[#0F382C] hover:bg-[#F4EFE6]'
+                  }`}
+                >
+                  <Bookmark
+                    className={`w-3.5 h-3.5 ${
+                      savedIds.includes(readingArticle.id) ? 'fill-[#C5A880] text-[#8C5B15]' : 'text-[#A58455]'
+                    }`}
+                  />
+                  <span>
+                    {savedIds.includes(readingArticle.id) ? t('saved_article') : t('save_article')}
+                  </span>
+                </button>
+
+                {/* Share Link */}
+                <button
+                  type="button"
+                  onClick={() => handleShareArticle(readingArticle)}
+                  className="inline-flex items-center gap-1.5 text-xs font-readex font-semibold text-[#0F382C] bg-white hover:bg-[#F4EFE6] px-3 py-1.5 rounded-lg border border-[#E0D4C1] transition"
+                >
+                  {copiedLinkId === readingArticle.id ? (
+                    <>
+                      <Check className="w-3.5 h-3.5 text-emerald-600" />
+                      <span className="text-emerald-700">{t('link_copied')}</span>
+                    </>
+                  ) : (
+                    <>
+                      <Share2 className="w-3.5 h-3.5 text-[#A58455]" />
+                      <span>{t('share_article')}</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
           </div>
 
-          {/* Article Header */}
-          <div className="border-b border-[#C5A880]/30 pb-6">
-            <div className="flex flex-wrap items-center gap-2 mb-3">
-              <span className="text-xs px-2.5 py-0.5 rounded-full bg-[#0F382C]/10 text-[#0F382C] border border-[#C5A880]/40 font-readex font-semibold">
-                {translateArticleType(readingArticle.type)}
-              </span>
-              <span className="text-xs px-2.5 py-0.5 rounded bg-[#F4EFE6] text-[#A58455] font-readex font-medium">
-                {translateCategory(readingArticle.category)}
-              </span>
-              <div className="flex items-center gap-1 text-xs text-[#1E1E1E]/60 font-readex mr-auto rtl:mr-auto ltr:ml-auto">
-                <Calendar className="w-3.5 h-3.5 text-[#A58455]" />
-                <span>{readingArticle.date}</span>
+          <div className="p-8 sm:p-12 space-y-8">
+            {/* Article Header */}
+            <div className="border-b border-[#C5A880]/30 pb-6">
+              <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-xs px-2.5 py-0.5 rounded-full bg-[#0F382C]/10 text-[#0F382C] border border-[#C5A880]/40 font-readex font-semibold">
+                    {translateArticleType(readingArticle.type)}
+                  </span>
+                  <span className="text-xs px-2.5 py-0.5 rounded bg-[#F4EFE6] text-[#A58455] font-readex font-medium">
+                    {translateCategory(readingArticle.category)}
+                  </span>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-4 text-xs text-[#1E1E1E]/70 font-readex">
+                  <span className="flex items-center gap-1">
+                    <Clock className="w-3.5 h-3.5 text-[#A58455]" />
+                    <span>
+                      {estimateReadingMinutes(readingArticle.content)} {t('min_read')}
+                    </span>
+                  </span>
+                  <span className="flex items-center gap-1 font-semibold text-[#0F382C]">
+                    <Eye className="w-3.5 h-3.5 text-[#A58455]" />
+                    <span>
+                      {readingArticle.views || 1} {t('views_label')}
+                    </span>
+                  </span>
+                  <span className="flex items-center gap-1">
+                    <Calendar className="w-3.5 h-3.5 text-[#A58455]" />
+                    <span>{readingArticle.date}</span>
+                  </span>
+                </div>
+              </div>
+
+              <h1 className="font-amiri font-bold text-3xl sm:text-4xl text-[#0F382C] mb-4">
+                {readingArticle.title}
+              </h1>
+
+              {/* Tags */}
+              <div className="flex flex-wrap items-center gap-1.5">
+                {readingArticle.tags.map(tag => (
+                  <button
+                    key={tag}
+                    type="button"
+                    onClick={() => {
+                      setSelectedTag(tag);
+                      handleCloseArticle();
+                    }}
+                    className="text-[11px] font-readex px-2.5 py-0.5 rounded bg-[#FDFBF7] border border-[#C5A880]/30 text-[#A58455] hover:bg-[#F4EFE6] hover:text-[#0F382C] transition"
+                  >
+                    #{tag}
+                  </button>
+                ))}
               </div>
             </div>
 
-            <h1 className="font-amiri font-bold text-3xl sm:text-4xl text-[#0F382C] mb-4">
-              {readingArticle.title}
-            </h1>
-
-            {/* Tags */}
-            <div className="flex flex-wrap items-center gap-1.5">
-              {readingArticle.tags.map(tag => (
-                <span
-                  key={tag}
-                  className="text-[11px] font-readex px-2 py-0.5 rounded bg-[#FDFBF7] border border-[#C5A880]/30 text-[#A58455]"
-                >
-                  #{tag}
-                </span>
-              ))}
+            {/* Article Body */}
+            <div className={`font-naskh text-[#1E1E1E] space-y-4 whitespace-pre-line select-text ${getBodyFontClass()}`}>
+              {readingArticle.content}
             </div>
-          </div>
 
-          {/* Article Body */}
-          <div className="font-naskh text-[#1E1E1E] text-base sm:text-lg leading-loose space-y-4 whitespace-pre-line select-text">
-            {readingArticle.content}
-          </div>
+            {/* Engagement & Sharing Actions */}
+            <div className="pt-6 border-t border-[#C5A880]/30 flex flex-wrap items-center justify-between gap-4">
+              <div className="flex flex-wrap items-center gap-2.5">
+                <button
+                  type="button"
+                  onClick={() => toggleLikeArticle(readingArticle.id)}
+                  className={`px-4 py-2 rounded-xl text-xs font-readex flex items-center gap-2 font-semibold border transition ${
+                    likedIds.includes(readingArticle.id)
+                      ? 'bg-emerald-50 border-emerald-300 text-emerald-800 shadow-2xs'
+                      : 'bg-[#FAF6EE] border-[#E0D4C1] text-[#0F382C] hover:bg-[#F4EFE6]'
+                  }`}
+                >
+                  <Heart
+                    className={`w-4 h-4 ${
+                      likedIds.includes(readingArticle.id)
+                        ? 'fill-emerald-600 text-emerald-600'
+                        : 'text-[#A58455]'
+                    }`}
+                  />
+                  <span>
+                    {likedIds.includes(readingArticle.id) ? t('benefited_done') : t('benefited_btn')}
+                  </span>
+                </button>
 
-          {/* Bottom Actions */}
-          <div className="pt-6 border-t border-[#C5A880]/30 flex flex-wrap items-center justify-between gap-4">
-            <button
-              onClick={() => handleCopyContent(readingArticle)}
-              className="px-4 py-2 rounded-xl bg-[#0F382C] text-white hover:bg-[#164E3D] text-xs font-readex flex items-center gap-2 shadow-sm font-semibold"
-            >
-              {copiedId === readingArticle.id ? (
-                <>
-                  <Check className="w-4 h-4 text-emerald-400" />
-                  <span>{t('article_copied')}</span>
-                </>
-              ) : (
-                <>
-                  <Copy className="w-4 h-4 text-[#DFC7A5]" />
-                  <span>{t('copy_full_article')}</span>
-                </>
-              )}
-            </button>
+                <button
+                  onClick={() => handleCopyContent(readingArticle)}
+                  className="px-4 py-2 rounded-xl bg-[#0F382C] text-white hover:bg-[#164E3D] text-xs font-readex flex items-center gap-2 shadow-sm font-semibold"
+                >
+                  {copiedId === readingArticle.id ? (
+                    <>
+                      <Check className="w-4 h-4 text-emerald-400" />
+                      <span>{t('article_copied')}</span>
+                    </>
+                  ) : (
+                    <>
+                      <Copy className="w-4 h-4 text-[#DFC7A5]" />
+                      <span>{t('copy_full_article')}</span>
+                    </>
+                  )}
+                </button>
 
-            <span className="text-xs font-amiri text-[#A58455]">
-              «{t('written_by_attribution')}»
-            </span>
+                <a
+                  href={getWhatsAppShareHref(readingArticle)}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="px-4 py-2 rounded-xl bg-[#25D366]/15 hover:bg-[#25D366]/25 border border-[#25D366]/40 text-[#0F382C] text-xs font-readex font-semibold flex items-center gap-2 transition"
+                >
+                  <MessageCircle className="w-4 h-4 text-emerald-700" />
+                  <span>{t('share_whatsapp')}</span>
+                </a>
+              </div>
+
+              <span className="text-xs font-amiri text-[#A58455]">
+                «{t('written_by_attribution')}»
+              </span>
+            </div>
+
+            {/* Related Reflections & Articles */}
+            {relatedArticles.length > 0 && (
+              <div className="pt-8 border-t border-[#E8DCC9] space-y-4">
+                <h3 className="font-amiri font-bold text-xl text-[#0F382C] flex items-center gap-2">
+                  <Sparkles className="w-4 h-4 text-[#A58455]" />
+                  <span>{t('related_articles')}</span>
+                </h3>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {relatedArticles.map(rel => (
+                    <div
+                      key={rel.id}
+                      onClick={() => handleOpenArticle(rel)}
+                      className="p-5 rounded-2xl bg-[#FAF6EE] border border-[#E8DCC9] hover:border-[#0F382C]/40 cursor-pointer transition group"
+                    >
+                      <div className="flex items-center justify-between text-[11px] font-readex text-[#8C6D3B] mb-1.5">
+                        <span className="font-semibold text-[#0F382C]">{translateArticleType(rel.type)}</span>
+                        <span className="flex items-center gap-2">
+                          <span className="flex items-center gap-1">
+                            <Eye className="w-3 h-3" />
+                            {rel.views || 1}
+                          </span>
+                          <span>• {rel.date}</span>
+                        </span>
+                      </div>
+                      <h4 className="font-amiri font-bold text-lg text-[#0F382C] group-hover:text-[#164E3D] mb-1">
+                        {rel.title}
+                      </h4>
+                      <p className="font-naskh text-xs text-[#2D332F] line-clamp-2">
+                        {rel.summary || rel.content.slice(0, 120)}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         </div>
       ) : (
         <>
           {/* Filters Bar */}
-          <div className="bg-white rounded-3xl border border-[#E8DCC9] p-6 sm:p-8 shadow-xs space-y-6">
-            <div className="relative">
-              <input
-                type="text"
-                value={searchQuery}
-                onChange={e => setSearchQuery(e.target.value)}
-                placeholder={t('search_articles_placeholder')}
-                className="w-full pl-11 pr-4 py-3.5 text-xs sm:text-sm rounded-xl border border-[#E0D4C1] bg-[#FDFBF7] focus:outline-none focus:ring-2 focus:ring-[#0F382C]/30 focus:border-[#0F382C] font-readex text-[#1E1E1E]"
-              />
-              <Search className="w-4 h-4 text-[#A58455] absolute left-4 top-1/2 -translate-y-1/2 pointer-events-none" />
+          <div className="bg-white rounded-3xl border border-[#E8DCC9] p-6 sm:p-8 shadow-xs space-y-5">
+            <div className="flex flex-col sm:flex-row gap-3">
+              <div className="relative flex-1">
+                <input
+                  type="text"
+                  value={searchQuery}
+                  onChange={e => setSearchQuery(e.target.value)}
+                  placeholder={t('search_articles_placeholder')}
+                  className="w-full pl-11 pr-4 py-3.5 text-xs sm:text-sm rounded-xl border border-[#E0D4C1] bg-[#FDFBF7] focus:outline-none focus:ring-2 focus:ring-[#0F382C]/30 focus:border-[#0F382C] font-readex text-[#1E1E1E]"
+                />
+                <Search className="w-4 h-4 text-[#A58455] absolute left-4 top-1/2 -translate-y-1/2 pointer-events-none" />
+              </div>
+
+              {/* Sort Toggle */}
+              <div className="flex items-center gap-1 rounded-xl border border-[#E0D4C1] bg-[#FDFBF7] p-1 font-readex text-xs shrink-0">
+                <button
+                  type="button"
+                  onClick={() => setSortBy('latest')}
+                  className={`px-3 py-2 rounded-lg transition ${
+                    sortBy === 'latest'
+                      ? 'bg-[#0F382C] text-white font-bold shadow-2xs'
+                      : 'text-[#1E1E1E] hover:bg-[#F4EFE6]'
+                  }`}
+                >
+                  {t('sort_latest')}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSortBy('popular')}
+                  className={`px-3 py-2 rounded-lg flex items-center gap-1.5 transition ${
+                    sortBy === 'popular'
+                      ? 'bg-[#0F382C] text-white font-bold shadow-2xs'
+                      : 'text-[#1E1E1E] hover:bg-[#F4EFE6]'
+                  }`}
+                >
+                  <TrendingUp className="w-3.5 h-3.5" />
+                  <span>{t('sort_popular')}</span>
+                </button>
+              </div>
             </div>
 
-            {/* Type selector */}
-            <div className="flex flex-wrap items-center gap-2.5 text-xs font-readex">
-              <span className="text-[#8C6D3B] font-bold">{t('article_type_filter')}</span>
+            {/* Type & Saved selector */}
+            <div className="flex flex-wrap items-center justify-between gap-3 text-xs font-readex">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-[#8C6D3B] font-bold">{t('article_type_filter')}</span>
+                <button
+                  onClick={() => {
+                    setSelectedType('all');
+                    setShowSavedOnly(false);
+                  }}
+                  className={`px-3.5 py-2 rounded-xl transition ${
+                    selectedType === 'all' && !showSavedOnly
+                      ? 'bg-[#0F382C] text-white font-bold shadow-xs'
+                      : 'bg-[#F4EFE6] text-[#0F382C] hover:bg-[#C5A880]/20 font-medium'
+                  }`}
+                >
+                  {t('all_articles')} ({articles.length})
+                </button>
+                {(['خواطر ابن بيضاء', 'بحث أكاديمي', 'مقال عقدي', 'مقال لغوي'] as const).map(typeKey => (
+                  <button
+                    key={typeKey}
+                    onClick={() => {
+                      setSelectedType(typeKey);
+                      setShowSavedOnly(false);
+                    }}
+                    className={`px-3.5 py-2 rounded-xl transition ${
+                      selectedType === typeKey && !showSavedOnly
+                        ? 'bg-[#0F382C] text-white font-bold shadow-xs'
+                        : 'bg-[#F4EFE6] text-[#0F382C] hover:bg-[#C5A880]/20 font-medium'
+                    }`}
+                  >
+                    {translateArticleType(typeKey)}
+                  </button>
+                ))}
+              </div>
+
+              {/* Saved Reading List Pill */}
               <button
-                onClick={() => setSelectedType('all')}
-                className={`px-3.5 py-2 rounded-xl transition ${
-                  selectedType === 'all'
-                    ? 'bg-[#0F382C] text-white font-bold shadow-xs'
-                    : 'bg-[#F4EFE6] text-[#0F382C] hover:bg-[#C5A880]/20 font-medium'
+                type="button"
+                onClick={() => setShowSavedOnly(prev => !prev)}
+                className={`px-3.5 py-2 rounded-xl border flex items-center gap-1.5 transition ${
+                  showSavedOnly
+                    ? 'bg-[#FAF3E3] border-[#C5A880] text-[#8C5B15] font-bold shadow-xs'
+                    : 'bg-[#FDFBF7] border-[#E0D4C1] text-[#0F382C] hover:bg-[#F4EFE6] font-medium'
                 }`}
               >
-                {t('all_articles')} ({articles.length})
-              </button>
-              <button
-                onClick={() => setSelectedType('خواطر ابن بيضاء')}
-                className={`px-3.5 py-2 rounded-xl transition ${
-                  selectedType === 'خواطر ابن بيضاء'
-                    ? 'bg-[#0F382C] text-white font-bold shadow-xs'
-                    : 'bg-[#F4EFE6] text-[#0F382C] hover:bg-[#C5A880]/20 font-medium'
-                }`}
-              >
-                {translateArticleType('خواطر ابن بيضاء')}
-              </button>
-              <button
-                onClick={() => setSelectedType('بحث أكاديمي')}
-                className={`px-3.5 py-2 rounded-xl transition ${
-                  selectedType === 'بحث أكاديمي'
-                    ? 'bg-[#0F382C] text-white font-bold shadow-xs'
-                    : 'bg-[#F4EFE6] text-[#0F382C] hover:bg-[#C5A880]/20 font-medium'
-                }`}
-              >
-                {translateArticleType('بحث أكاديمي')}
-              </button>
-              <button
-                onClick={() => setSelectedType('مقال عقدي')}
-                className={`px-3.5 py-2 rounded-xl transition ${
-                  selectedType === 'مقال عقدي'
-                    ? 'bg-[#0F382C] text-white font-bold shadow-xs'
-                    : 'bg-[#F4EFE6] text-[#0F382C] hover:bg-[#C5A880]/20 font-medium'
-                }`}
-              >
-                {translateArticleType('مقال عقدي')}
-              </button>
-              <button
-                onClick={() => setSelectedType('مقال لغوي')}
-                className={`px-3.5 py-2 rounded-xl transition ${
-                  selectedType === 'مقال لغوي'
-                    ? 'bg-[#0F382C] text-white font-bold shadow-xs'
-                    : 'bg-[#F4EFE6] text-[#0F382C] hover:bg-[#C5A880]/20 font-medium'
-                }`}
-              >
-                {lang === 'ar' ? 'مقال لغوي' : 'Linguistic Article'}
+                <Bookmark
+                  className={`w-3.5 h-3.5 ${showSavedOnly ? 'fill-[#C5A880] text-[#8C5B15]' : 'text-[#A58455]'}`}
+                />
+                <span>
+                  {t('saved_only')} ({savedIds.filter(id => articles.some(a => a.id === id)).length})
+                </span>
               </button>
             </div>
+
+            {selectedTag && (
+              <div className="flex items-center gap-2 text-xs font-readex pt-2 border-t border-[#E8DCC9]">
+                <span className="text-[#8C6D3B]">
+                  {lang === 'ar' ? 'تصفية حسب الوسم:' : 'Filtered by tag:'}
+                </span>
+                <span className="px-2.5 py-1 rounded-lg bg-[#0F382C] text-white font-bold">
+                  #{selectedTag}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setSelectedTag(null)}
+                  className="text-red-700 hover:underline font-semibold"
+                >
+                  {t('clear_btn')}
+                </button>
+              </div>
+            )}
           </div>
 
           {/* Articles Grid */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-8 sm:gap-10">
-            {paginatedArticles.map(art => {
-              const isKhatira = art.type === 'خواطر ابن بيضاء';
+            {paginatedArticles.length === 0 ? (
+              <div className="col-span-full bg-white rounded-3xl p-14 text-center border border-[#E8DCC9] shadow-xs space-y-2">
+                <FileText className="w-10 h-10 text-[#C5A880] mx-auto opacity-70" />
+                <p className="font-amiri font-bold text-2xl text-[#0F382C]">
+                  {showSavedOnly
+                    ? lang === 'ar'
+                      ? 'قائمة المحفوظات فارغة حالياً'
+                      : 'Your saved reading list is empty'
+                    : lang === 'ar'
+                    ? 'لا توجد مقالات أو خواطر مطابقة للبحث'
+                    : 'No matching reflections or papers found'}
+                </p>
+                <p className="text-xs font-readex text-[#8C6D3B]">
+                  {showSavedOnly
+                    ? lang === 'ar'
+                      ? 'اضغط على أيقونة الحفظ في أي مقال لإضافته إلى قائمة القراءة لاحقاً.'
+                      : 'Tap the bookmark icon on any article to save it for later reading.'
+                    : lang === 'ar'
+                    ? 'جرّب مسح المرشحات أو البحث بكلمات أخرى.'
+                    : 'Try clearing active filters or searching another keyword.'}
+                </p>
+              </div>
+            ) : (
+              paginatedArticles.map(art => {
+                const isKhatira = art.type === 'خواطر ابن بيضاء';
+                const isSaved = savedIds.includes(art.id);
+                const mins = estimateReadingMinutes(art.content);
 
-              return (
-                <div
-                  key={art.id}
-                  className="bg-white rounded-3xl border border-[#E8DCC9] shadow-[0_2px_12px_-2px_rgba(15,56,44,0.04)] hover:shadow-lg hover:border-[#0F382C]/40 transition flex flex-col justify-between p-7 sm:p-8 group"
-                >
-                  <div>
-                    {/* Header line */}
-                    <div className="flex items-center justify-between gap-2 mb-3">
-                      <span
-                        className={`text-[11px] font-readex font-semibold px-2.5 py-0.5 rounded-full border ${
-                          isKhatira
-                            ? 'bg-amber-50 text-amber-900 border-amber-200'
-                            : 'bg-emerald-50 text-emerald-900 border-emerald-200'
-                        }`}
-                      >
-                        {translateArticleType(art.type)}
-                      </span>
-                      <span className="text-xs text-[#A58455] font-readex flex items-center gap-1">
-                        <Calendar className="w-3.5 h-3.5" />
-                        <span>{art.date}</span>
-                      </span>
-                    </div>
-
-                    {/* Title */}
-                    <h3
-                      onClick={() => handleOpenArticle(art)}
-                      className="font-amiri font-bold text-2xl text-[#0F382C] mb-2 group-hover:text-[#164E3D] cursor-pointer transition"
-                    >
-                      {art.title}
-                    </h3>
-
-                    {/* Summary */}
-                    <p className="font-naskh text-sm text-[#1E1E1E]/80 leading-relaxed line-clamp-3 mb-4">
-                      {art.summary || art.content.slice(0, 160) + '...'}
-                    </p>
-
-                    {/* Tags */}
-                    <div className="flex flex-wrap gap-1 mb-4">
-                      {art.tags.slice(0, 3).map(tag => (
+                return (
+                  <div
+                    key={art.id}
+                    className="bg-white rounded-3xl border border-[#E8DCC9] shadow-[0_2px_12px_-2px_rgba(15,56,44,0.04)] hover:shadow-lg hover:border-[#0F382C]/40 transition flex flex-col justify-between p-7 sm:p-8 group"
+                  >
+                    <div>
+                      {/* Header line */}
+                      <div className="flex items-center justify-between gap-2 mb-3">
                         <span
-                          key={tag}
-                          className="text-[10px] font-readex px-2 py-0.5 rounded bg-[#FDFBF7] border border-[#C5A880]/30 text-[#A58455]"
+                          className={`text-[11px] font-readex font-semibold px-2.5 py-0.5 rounded-full border ${
+                            isKhatira
+                              ? 'bg-amber-50 text-amber-900 border-amber-200'
+                              : 'bg-emerald-50 text-emerald-900 border-emerald-200'
+                          }`}
                         >
-                          #{tag}
+                          {translateArticleType(art.type)}
                         </span>
-                      ))}
-                    </div>
-                  </div>
+                        <div className="flex items-center gap-3 text-xs text-[#A58455] font-readex">
+                          <span className="flex items-center gap-1 font-semibold text-[#0F382C]" title={t('views_label')}>
+                            <Eye className="w-3.5 h-3.5 text-[#A58455]" />
+                            <span>{art.views || 1}</span>
+                          </span>
+                          <span className="flex items-center gap-1">
+                            <Calendar className="w-3.5 h-3.5" />
+                            <span>{art.date}</span>
+                          </span>
+                        </div>
+                      </div>
 
-                  {/* Actions footer */}
-                  <div className="pt-4 border-t border-[#C5A880]/20 flex items-center justify-between text-xs font-readex">
-                    <button
-                      onClick={() => handleOpenArticle(art)}
-                      className="text-[#0F382C] hover:underline font-bold flex items-center gap-1"
-                    >
-                      <BookOpen className="w-3.5 h-3.5" />
-                      <span>{t('read_full')}</span>
-                    </button>
-
-                    <div className="flex items-center gap-1">
-                      <button
-                        type="button"
-                        onClick={(e) => handleShareArticle(art, e)}
-                        className="p-1.5 rounded-lg text-[#A58455] hover:bg-[#F4EFE6] hover:text-[#0F382C] transition"
-                        title={t('share_article')}
-                        aria-label={t('share_article')}
+                      {/* Title */}
+                      <h3
+                        onClick={() => handleOpenArticle(art)}
+                        className="font-amiri font-bold text-2xl text-[#0F382C] mb-2 group-hover:text-[#164E3D] cursor-pointer transition"
                       >
-                        {copiedLinkId === art.id ? (
-                          <Check className="w-4 h-4 text-emerald-600" />
-                        ) : (
-                          <Share2 className="w-4 h-4" />
-                        )}
+                        {art.title}
+                      </h3>
+
+                      {/* Summary */}
+                      <p className="font-naskh text-sm text-[#1E1E1E]/80 leading-relaxed line-clamp-3 mb-4">
+                        {art.summary || art.content.slice(0, 160) + '...'}
+                      </p>
+
+                      {/* Tags + Reading Time */}
+                      <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
+                        <div className="flex flex-wrap gap-1">
+                          {art.tags.slice(0, 3).map(tag => (
+                            <button
+                              key={tag}
+                              type="button"
+                              onClick={() => setSelectedTag(tag)}
+                              className="text-[10px] font-readex px-2 py-0.5 rounded bg-[#FDFBF7] border border-[#C5A880]/30 text-[#A58455] hover:bg-[#F4EFE6] hover:text-[#0F382C] transition"
+                            >
+                              #{tag}
+                            </button>
+                          ))}
+                        </div>
+                        <span className="text-[11px] font-readex text-[#8C6D3B] flex items-center gap-1">
+                          <Clock className="w-3 h-3" />
+                          <span>
+                            {mins} {t('min_read')}
+                          </span>
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Actions footer */}
+                    <div className="pt-4 border-t border-[#C5A880]/20 flex items-center justify-between text-xs font-readex">
+                      <button
+                        onClick={() => handleOpenArticle(art)}
+                        className="text-[#0F382C] hover:underline font-bold flex items-center gap-1"
+                      >
+                        <BookOpen className="w-3.5 h-3.5" />
+                        <span>{t('read_full')}</span>
                       </button>
 
-                      <button
-                        onClick={() => handleCopyContent(art)}
-                        className="p-1.5 rounded-lg text-[#A58455] hover:bg-[#F4EFE6] hover:text-[#0F382C] transition"
-                        title={t('copy_full_article')}
-                      >
-                        {copiedId === art.id ? (
-                          <Check className="w-4 h-4 text-emerald-600" />
-                        ) : (
-                          <Copy className="w-4 h-4" />
-                        )}
-                      </button>
+                      <div className="flex items-center gap-1">
+                        <button
+                          type="button"
+                          onClick={(e) => toggleSaveArticle(art.id, e)}
+                          className={`p-1.5 rounded-lg transition ${
+                            isSaved
+                              ? 'text-[#8C5B15] bg-[#FAF3E3]'
+                              : 'text-[#A58455] hover:bg-[#F4EFE6] hover:text-[#0F382C]'
+                          }`}
+                          title={isSaved ? t('saved_article') : t('save_article')}
+                          aria-label={isSaved ? t('saved_article') : t('save_article')}
+                        >
+                          <Bookmark className={`w-4 h-4 ${isSaved ? 'fill-[#C5A880]' : ''}`} />
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={(e) => handleShareArticle(art, e)}
+                          className="p-1.5 rounded-lg text-[#A58455] hover:bg-[#F4EFE6] hover:text-[#0F382C] transition"
+                          title={t('share_article')}
+                          aria-label={t('share_article')}
+                        >
+                          {copiedLinkId === art.id ? (
+                            <Check className="w-4 h-4 text-emerald-600" />
+                          ) : (
+                            <Share2 className="w-4 h-4" />
+                          )}
+                        </button>
+
+                        <button
+                          onClick={() => handleCopyContent(art)}
+                          className="p-1.5 rounded-lg text-[#A58455] hover:bg-[#F4EFE6] hover:text-[#0F382C] transition"
+                          title={t('copy_full_article')}
+                        >
+                          {copiedId === art.id ? (
+                            <Check className="w-4 h-4 text-emerald-600" />
+                          ) : (
+                            <Copy className="w-4 h-4" />
+                          )}
+                        </button>
+                      </div>
                     </div>
                   </div>
-                </div>
-              );
-            })}
+                );
+              })
+            )}
           </div>
 
           <Pagination

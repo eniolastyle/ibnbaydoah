@@ -1,4 +1,4 @@
-import { S3Client, ListObjectsV2Command } from '@aws-sdk/client-s3';
+import { S3Client, ListObjectsV2Command, PutObjectCommand } from '@aws-sdk/client-s3';
 import { dataStore } from '../src/db/store.ts';
 import type {
   Article,
@@ -47,6 +47,110 @@ function encodeR2Key(key: string): string {
 function buildPublicUrl(baseUrl: string, key: string): string {
   const trimmedBase = baseUrl.trim().replace(/\/+$/, '');
   return `${trimmedBase}/${encodeR2Key(key)}`;
+}
+
+function sanitizeSegment(raw: string, fallback = 'item'): string {
+  const cleaned = raw
+    .replace(/[/\\]+/g, '-')
+    .replace(/\.\.+/g, '.')
+    .replace(/[\u0000-\u001f\u007f<>:"|?*]+/g, '')
+    .replace(/\s+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^[-.]+|[-.]+$/g, '');
+  return cleaned || fallback;
+}
+
+export async function uploadFileToR2(params: {
+  buffer: Buffer;
+  originalFilename: string;
+  contentType?: string;
+  kind: 'book' | 'matn' | 'audio';
+  prefix?: string;
+}) {
+  const cfg = getR2Config();
+  if (!cfg.configured) {
+    throw new Error(
+      'إعدادات Cloudflare R2 غير مكتملة في متغيرات البيئة (R2_ENDPOINT, R2_BUCKET, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_PUBLIC_URL) / Cloudflare R2 env vars are not configured.'
+    );
+  }
+
+  if (!params.buffer || params.buffer.length === 0) {
+    throw new Error('الملف المرفوع فارغ / Uploaded file is empty');
+  }
+
+  const maxBytes = params.kind === 'audio' ? 200 * 1024 * 1024 : 100 * 1024 * 1024;
+  if (params.buffer.length > maxBytes) {
+    throw new Error(
+      `حجم الملف يتجاوز الحد المسموح (${params.kind === 'audio' ? '200MB' : '100MB'}) / File exceeds maximum allowed size.`
+    );
+  }
+
+  const rawName = (params.originalFilename || '').split(/[/\\]/).pop() || 'upload';
+  const ext = getExt(rawName);
+  const allowedExts = params.kind === 'audio' ? AUDIO_EXTENSIONS : PDF_EXTENSIONS;
+  if (!allowedExts.has(ext)) {
+    throw new Error(
+      params.kind === 'audio'
+        ? 'صيغة الملف غير مدعومة (المسموح: MP3, M4A, AAC, OGG, OPUS, WAV, FLAC) / Unsupported audio format'
+        : 'يجب أن يكون الملف بصيغة PDF فقط / Only PDF files are allowed'
+    );
+  }
+
+  const baseName = sanitizeSegment(getBaseName(rawName), `${params.kind}-${Date.now()}`);
+  const safeFilename = `${baseName}${ext}`;
+  const cleanPrefix = sanitizeSegment(params.prefix || '', 'general');
+
+  let key = '';
+  if (params.kind === 'book') {
+    key = `books/${Date.now()}-${safeFilename}`;
+  } else if (params.kind === 'matn') {
+    key = `courses/${cleanPrefix}/matn-${Date.now()}-${safeFilename}`;
+  } else {
+    key = `courses/${cleanPrefix}/${Date.now()}-${safeFilename}`;
+  }
+
+  const resolvedContentType =
+    params.contentType && params.contentType !== 'application/octet-stream'
+      ? params.contentType
+      : ext === '.pdf'
+      ? 'application/pdf'
+      : ext === '.m4a'
+      ? 'audio/mp4'
+      : ext === '.ogg' || ext === '.opus'
+      ? 'audio/ogg'
+      : ext === '.wav'
+      ? 'audio/wav'
+      : ext === '.flac'
+      ? 'audio/flac'
+      : 'audio/mpeg';
+
+  const s3 = new S3Client({
+    region: 'auto',
+    endpoint: cfg.endpoint,
+    forcePathStyle: true,
+    credentials: {
+      accessKeyId: cfg.accessKeyId,
+      secretAccessKey: cfg.secretAccessKey,
+    },
+  });
+
+  await s3.send(
+    new PutObjectCommand({
+      Bucket: cfg.bucket,
+      Key: key,
+      Body: params.buffer,
+      ContentType: resolvedContentType,
+      CacheControl: 'public, max-age=31536000',
+    })
+  );
+
+  return {
+    key,
+    url: buildPublicUrl(cfg.publicUrl, key),
+    filename: rawName,
+    size: params.buffer.length,
+    contentType: resolvedContentType,
+  };
 }
 
 export function getR2Config() {

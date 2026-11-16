@@ -46,48 +46,39 @@ export const Hero: React.FC<HeroProps> = ({
 
   const ArrowIcon = lang === 'ar' ? ArrowLeft : ArrowRight;
 
-  // Prefer poems that actually contain verses; fall back to all platform poems
-  const spotlightPoems = useMemo(() => {
-    const withVerses = poems.filter(p => p.verses && p.verses.length > 0);
-    return withVerses.length > 0 ? withVerses : poems;
-  }, [poems]);
+  // Fetch all platform poems, then highlight the top 3 admin-featured poems (fallback to top 3 overall)
+  const featuredPoems = useMemo(
+    () => poems.filter(p => Boolean(p.featured)),
+    [poems]
+  );
 
-  // Default to the flagship poem (largest totalVerses or poem-2 if available) once poems load
-  const defaultSpotlightIndex = useMemo(() => {
-    if (spotlightPoems.length === 0) return 0;
-    const flagshipIdx = spotlightPoems.findIndex(p => p.id === 'poem-2');
-    if (flagshipIdx !== -1) return flagshipIdx;
-    let maxIdx = 0;
-    for (let i = 1; i < spotlightPoems.length; i++) {
-      if ((spotlightPoems[i].totalVerses || 0) > (spotlightPoems[maxIdx].totalVerses || 0)) {
-        maxIdx = i;
-      }
+  const spotlightPoems = useMemo(() => {
+    if (featuredPoems.length > 0) {
+      return featuredPoems.slice(0, 3);
     }
-    return maxIdx;
-  }, [spotlightPoems]);
+    const withVerses = poems.filter(p => p.verses && p.verses.length > 0);
+    return (withVerses.length > 0 ? withVerses : poems).slice(0, 3);
+  }, [featuredPoems, poems]);
 
   const [spotlightIndex, setSpotlightIndex] = useState<number>(0);
-  const [hasUserCycled, setHasUserCycled] = useState<boolean>(false);
 
   useEffect(() => {
-    if (!hasUserCycled && spotlightPoems.length > 0) {
-      setSpotlightIndex(defaultSpotlightIndex);
-    }
-  }, [defaultSpotlightIndex, hasUserCycled, spotlightPoems.length]);
+    setSpotlightIndex(0);
+  }, [spotlightPoems.length]);
 
   const safeSpotlightIndex =
-    spotlightPoems.length > 0 ? ((spotlightIndex % spotlightPoems.length) + spotlightPoems.length) % spotlightPoems.length : 0;
+    spotlightPoems.length > 0
+      ? ((spotlightIndex % spotlightPoems.length) + spotlightPoems.length) % spotlightPoems.length
+      : 0;
   const spotlightPoem = spotlightPoems[safeSpotlightIndex] || null;
 
   const handlePrevPoem = () => {
     if (spotlightPoems.length <= 1) return;
-    setHasUserCycled(true);
     setSpotlightIndex(prev => (prev - 1 + spotlightPoems.length) % spotlightPoems.length);
   };
 
   const handleNextPoem = () => {
     if (spotlightPoems.length <= 1) return;
-    setHasUserCycled(true);
     setSpotlightIndex(prev => (prev + 1) % spotlightPoems.length);
   };
 

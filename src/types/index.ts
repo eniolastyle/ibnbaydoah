@@ -96,6 +96,7 @@ export interface Poem {
   year: string;
   category: string;
   summary: string;
+  featured?: boolean;
   verses: PoemVerse[];
 }
 

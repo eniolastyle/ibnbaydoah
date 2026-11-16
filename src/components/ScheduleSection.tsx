@@ -37,8 +37,10 @@ export const ScheduleSection: React.FC<ScheduleSectionProps> = ({
   const [studentName, setStudentName] = useState('');
   const [questionText, setQuestionText] = useState('');
   const [questionCategory, setQuestionCategory] = useState('العقيدة والتوحيد');
+  const [websiteTrap, setWebsiteTrap] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitSuccess, setSubmitSuccess] = useState(false);
+  const [submitError, setSubmitError] = useState('');
   const [questionSearch, setQuestionSearch] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
   const PAGE_SIZE = 5;
@@ -49,7 +51,15 @@ export const ScheduleSection: React.FC<ScheduleSectionProps> = ({
 
   const handleSubmitQuestion = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!questionText.trim()) return;
+    setSubmitError('');
+    if (questionText.trim().length < 8) {
+      setSubmitError(
+        lang === 'ar'
+          ? 'يرجى كتابة نص السؤال بوضوح (8 أحرف على الأقل).'
+          : 'Please write your question clearly (at least 8 characters).'
+      );
+      return;
+    }
 
     setIsSubmitting(true);
     try {
@@ -59,27 +69,39 @@ export const ScheduleSection: React.FC<ScheduleSectionProps> = ({
         body: JSON.stringify({
           studentName: studentName.trim() || (lang === 'ar' ? 'طالب علم' : 'Student of Knowledge'),
           question: questionText.trim(),
-          category: questionCategory
+          category: questionCategory,
+          website: websiteTrap
         })
       });
 
-      if (res.ok) {
-        const json = await res.json();
-        if (json.success && json.data) {
+      const json = await res.json().catch(() => null);
+      if (res.ok && json?.success) {
+        if (json.data && json.data.answer) {
           onQuestionSubmitted(json.data);
         }
         setSubmitSuccess(true);
         setQuestionText('');
-        setTimeout(() => setSubmitSuccess(false), 5000);
+        setTimeout(() => setSubmitSuccess(false), 6000);
+      } else {
+        setSubmitError(
+          json?.message ||
+            (lang === 'ar' ? 'تعذر إرسال السؤال، يرجى المحاولة لاحقاً.' : 'Failed to submit question.')
+        );
       }
     } catch (err) {
       console.error('Failed to submit question:', err);
+      setSubmitError(
+        lang === 'ar' ? 'تعذر الاتصال بالخادم حالياً.' : 'Could not reach the server.'
+      );
     } finally {
       setIsSubmitting(false);
     }
   };
 
-  const filteredQuestions = questions.filter(q => {
+  // Public visitors only browse answered & moderated Q&As
+  const answeredQuestions = questions.filter(q => Boolean(q.answer && q.answer.trim().length > 0));
+
+  const filteredQuestions = answeredQuestions.filter(q => {
     if (!questionSearch.trim()) return true;
     const query = questionSearch.toLowerCase();
     return (
@@ -339,6 +361,19 @@ export const ScheduleSection: React.FC<ScheduleSectionProps> = ({
 
         {/* Question Submission Form */}
         <form onSubmit={handleSubmitQuestion} className="space-y-6 max-w-3xl">
+          {/* Hidden Honeypot Anti-Spam Trap */}
+          <div className="hidden" aria-hidden="true">
+            <label htmlFor="contact-website-field">Website</label>
+            <input
+              id="contact-website-field"
+              type="text"
+              tabIndex={-1}
+              autoComplete="off"
+              value={websiteTrap}
+              onChange={e => setWebsiteTrap(e.target.value)}
+            />
+          </div>
+
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
             <div>
               <label className="block text-xs font-readex font-bold text-[#1E1E1E] mb-2">
@@ -379,13 +414,21 @@ export const ScheduleSection: React.FC<ScheduleSectionProps> = ({
               onChange={e => setQuestionText(e.target.value)}
               placeholder={t('question_text_placeholder')}
               required
+              minLength={8}
+              maxLength={2500}
               className="w-full p-4 rounded-xl border border-[#E0D4C1] bg-[#FDFBF7] text-xs sm:text-sm font-readex focus:outline-none focus:ring-2 focus:ring-[#0F382C]/30 focus:border-[#0F382C] leading-relaxed"
             />
           </div>
 
+          {submitError && (
+            <div className="p-3 rounded-xl bg-red-50 border border-red-200 text-red-700 text-xs font-readex">
+              {submitError}
+            </div>
+          )}
+
           {submitSuccess && (
             <div className="p-3 rounded-xl bg-emerald-50 border border-emerald-300 text-emerald-800 text-xs font-readex flex items-center gap-2">
-              <CheckCircle className="w-4 h-4 text-emerald-600" />
+              <CheckCircle className="w-4 h-4 text-emerald-600 shrink-0" />
               <span>{t('sent_successfully')} {t('sent_success_note')}</span>
             </div>
           )}
@@ -430,39 +473,43 @@ export const ScheduleSection: React.FC<ScheduleSectionProps> = ({
           </div>
 
           <div className="space-y-4">
-            {paginatedQuestions.map(item => (
-              <div
-                key={item.id}
-                className="p-5 rounded-2xl bg-[#FDFBF7] border border-[#C5A880]/30 space-y-3"
-              >
-                <div className="flex items-center justify-between text-xs font-readex">
-                  <span className="font-bold text-[#0F382C] flex items-center gap-1.5">
-                    <span className="w-2 h-2 rounded-full bg-[#A58455]" />
-                    <span>{t('inquirer')}: {item.studentName}</span>
-                  </span>
-                  <span className="text-[#A58455]">
-                    {translateCategory(item.category)} • {item.date}
-                  </span>
-                </div>
-
-                <div className="font-naskh text-sm font-semibold text-[#1E1E1E]">
-                  «{item.question}»
-                </div>
-
-                {item.answer ? (
-                  <div className="p-4 rounded-xl bg-white border border-[#C5A880]/30 font-naskh text-sm leading-relaxed text-[#0F382C]">
-                    <span className="font-bold block mb-1 text-xs text-[#A58455] font-readex">
-                      {t('shaykh_answer')}
-                    </span>
-                    {item.answer}
-                  </div>
-                ) : (
-                  <div className="text-xs text-[#A58455] font-readex italic">
-                    {t('under_review')}
-                  </div>
-                )}
+            {paginatedQuestions.length === 0 ? (
+              <div className="p-6 rounded-2xl bg-[#FDFBF7] border border-[#C5A880]/30 text-center text-xs font-readex text-[#7A6440]">
+                {lang === 'ar'
+                  ? 'لا توجد فتاوى وأسئلة مجابة مطابقة حالياً.'
+                  : 'No answered inquiries match your search yet.'}
               </div>
-            ))}
+            ) : (
+              paginatedQuestions.map(item => (
+                <div
+                  key={item.id}
+                  className="p-5 rounded-2xl bg-[#FDFBF7] border border-[#C5A880]/30 space-y-3"
+                >
+                  <div className="flex items-center justify-between text-xs font-readex">
+                    <span className="font-bold text-[#0F382C] flex items-center gap-1.5">
+                      <span className="w-2 h-2 rounded-full bg-[#A58455]" />
+                      <span>{t('inquirer')}: {item.studentName}</span>
+                    </span>
+                    <span className="text-[#A58455]">
+                      {translateCategory(item.category)} • {item.date}
+                    </span>
+                  </div>
+
+                  <div className="font-naskh text-sm font-semibold text-[#1E1E1E]">
+                    «{item.question}»
+                  </div>
+
+                  {item.answer ? (
+                    <div className="p-4 rounded-xl bg-white border border-[#C5A880]/30 font-naskh text-sm leading-relaxed text-[#0F382C]">
+                      <span className="font-bold block mb-1 text-xs text-[#A58455] font-readex">
+                        {t('shaykh_answer')}
+                      </span>
+                      {item.answer}
+                    </div>
+                  ) : null}
+                </div>
+              ))
+            )}
           </div>
 
           <Pagination

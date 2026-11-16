@@ -49,7 +49,10 @@ import {
   RotateCcw,
   Link2,
   ShoppingBag,
-  MessageCircle
+  MessageCircle,
+  Upload,
+  Loader2,
+  Shield
 } from 'lucide-react';
 
 interface AdminDashboardProps {
@@ -154,6 +157,27 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [isAudioModalOpen, setIsAudioModalOpen] = useState(false);
   const [showBulkLessonPaster, setShowBulkLessonPaster] = useState(false);
   const [bulkLessonLines, setBulkLessonLines] = useState('');
+
+  // Direct R2 upload & security session states
+  const [r2Configured, setR2Configured] = useState<boolean | null>(null);
+  const [uploadState, setUploadState] = useState<{
+    target: string;
+    progress: number;
+    label: string;
+  } | null>(null);
+  const [activeSessions, setActiveSessions] = useState<
+    Array<{ idPrefix: string; username: string; expiresAt: number; isCurrent: boolean }>
+  >([]);
+  const [securityPosture, setSecurityPosture] = useState<{
+    trustProxy?: boolean;
+    rateLimitMaxAttempts?: number;
+    rateLimitLockMinutes?: number;
+    questionLimitPer15Min?: number;
+    isConfigured?: boolean;
+    updatedAt?: string;
+    storageEngine?: string;
+  } | null>(null);
+  const [isLoadingSessions, setIsLoadingSessions] = useState(false);
 
   // Poem CRUD state
   const [editingPoem, setEditingPoem] = useState<Partial<Poem> | null>(null);
@@ -279,6 +303,98 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     return res;
   };
 
+  const fetchSecurityAndR2Meta = useCallback(async () => {
+    const token = localStorage.getItem('ibn_baydoah_admin_token');
+    if (!token) return;
+    try {
+      setIsLoadingSessions(true);
+      const [sessRes, bulkRes] = await Promise.all([
+        fetch('/api/auth/sessions', { headers: { Authorization: `Bearer ${token}` } }).then(r => r.json()).catch(() => null),
+        fetch('/api/bulk/status', { headers: { Authorization: `Bearer ${token}` } }).then(r => r.json()).catch(() => null),
+      ]);
+      if (sessRes?.success && sessRes.data) {
+        setActiveSessions(sessRes.data.sessions || []);
+        setSecurityPosture(sessRes.data.security || null);
+      }
+      if (bulkRes?.success && bulkRes.r2) {
+        setR2Configured(Boolean(bulkRes.r2.configured));
+      }
+    } finally {
+      setIsLoadingSessions(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (isAuthenticated) {
+      fetchSecurityAndR2Meta();
+    }
+  }, [isAuthenticated, activeTab, fetchSecurityAndR2Meta]);
+
+  const handleRevokeOtherSessions = async () => {
+    try {
+      const res = await authFetch('/api/auth/revoke-other-sessions', { method: 'POST' });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        showBanner('success', data.message || (lang === 'ar' ? 'تم إنهاء الجلسات الأخرى' : 'Other sessions signed out'));
+        fetchSecurityAndR2Meta();
+      } else {
+        showBanner('error', data.message || 'Failed revoking sessions');
+      }
+    } catch {
+      showBanner('error', lang === 'ar' ? 'تعذر إنهاء الجلسات' : 'Error revoking sessions');
+    }
+  };
+
+  // Direct R2 upload via XHR for real progress percentage
+  const uploadFileToR2 = (
+    file: File,
+    opts: { kind: 'book' | 'matn' | 'audio'; prefix?: string; target: string; label?: string }
+  ): Promise<{ key: string; url: string; filename: string; size: number }> => {
+    return new Promise((resolve, reject) => {
+      const token = localStorage.getItem('ibn_baydoah_admin_token') || '';
+      const params = new URLSearchParams({
+        kind: opts.kind,
+        filename: file.name,
+        ...(opts.prefix ? { prefix: opts.prefix } : {}),
+      });
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', `/api/r2/upload?${params.toString()}`);
+      xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+      xhr.setRequestHeader('Content-Type', file.type || 'application/octet-stream');
+
+      xhr.upload.onprogress = (ev) => {
+        const pct = ev.lengthComputable ? Math.round((ev.loaded / ev.total) * 100) : 0;
+        setUploadState({
+          target: opts.target,
+          progress: pct,
+          label: opts.label || file.name,
+        });
+      };
+
+      xhr.onload = () => {
+        setUploadState(null);
+        try {
+          const json = JSON.parse(xhr.responseText || '{}');
+          if (xhr.status >= 200 && xhr.status < 300 && json.success && json.data) {
+            resolve(json.data);
+          } else {
+            reject(new Error(json.message || `Upload failed (${xhr.status})`));
+          }
+        } catch {
+          reject(new Error(`Upload failed (${xhr.status})`));
+        }
+      };
+
+      xhr.onerror = () => {
+        setUploadState(null);
+        reject(new Error(lang === 'ar' ? 'تعذر الاتصال بالخادم أثناء الرفع' : 'Network error during upload'));
+      };
+
+      setUploadState({ target: opts.target, progress: 0, label: opts.label || file.name });
+      xhr.send(file);
+    });
+  };
+
   // Login handler
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -295,8 +411,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       if (res.ok && data.success) {
         localStorage.setItem('ibn_baydoah_admin_token', data.token);
         setIsAuthenticated(true);
+        setIsConfigured(Boolean(data.isConfigured));
         setPassword('');
+        onDataRefresh();
       } else {
+        if (data.requiresSetup) {
+          setIsConfigured(false);
+        }
         setAuthError(data.message || (lang === 'ar' ? 'اسم المستخدم أو كلمة المرور غير صحيحة' : 'Invalid username or password'));
       }
     } catch {
@@ -313,8 +434,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       setAuthError(lang === 'ar' ? 'كلمتا المرور غير متطابقتين' : 'Passwords do not match');
       return;
     }
-    if (setupPassword.length < 6) {
-      setAuthError(lang === 'ar' ? 'يجب أن لا تقل كلمة المرور عن 6 أحرف' : 'Password must be at least 6 characters');
+    if (setupPassword.length < 8) {
+      setAuthError(lang === 'ar' ? 'يجب أن لا تقل كلمة المرور عن 8 أحرف' : 'Password must be at least 8 characters');
       return;
     }
 
@@ -331,6 +452,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         localStorage.setItem('ibn_baydoah_admin_token', data.token);
         setIsAuthenticated(true);
         setIsConfigured(true);
+        onDataRefresh();
       } else {
         setAuthError(data.message || 'Error configuring password');
       }
@@ -351,8 +473,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       setChangePassError(lang === 'ar' ? 'كلمتا المرور الجديدتان غير متطابقتين' : 'New passwords do not match');
       return;
     }
-    if (newPassword.length < 6) {
-      setChangePassError(lang === 'ar' ? 'يجب ألا تقل كلمة المرور عن 6 خانات' : 'Password must be at least 6 characters');
+    if (newPassword.length < 8) {
+      setChangePassError(lang === 'ar' ? 'يجب ألا تقل كلمة المرور عن 8 خانات' : 'Password must be at least 8 characters');
       return;
     }
 
@@ -364,11 +486,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       });
       const data = await res.json();
       if (res.ok && data.success) {
-        setChangePassSuccess(lang === 'ar' ? 'تم تحديث كلمة المرور بنجاح!' : 'Password updated successfully!');
+        setChangePassSuccess(lang === 'ar' ? 'تم تحديث كلمة المرور وإنهاء الجلسات الأخرى بنجاح!' : 'Password updated & other sessions revoked!');
         setCurrentPassword('');
         setNewPassword('');
         setConfirmNewPassword('');
-        setTimeout(() => setChangePassSuccess(''), 4000);
+        fetchSecurityAndR2Meta();
+        setTimeout(() => setChangePassSuccess(''), 5000);
       } else {
         setChangePassError(data.message || 'Error updating password');
       }
@@ -826,7 +949,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       category: 'الأدب والأخلاق',
       summary: '',
       year: '١٤٤٦ هـ',
-      totalVerses: 2
+      totalVerses: 2,
+      featured: false
     });
     setPoemRawLines('الصدر الأول ۞ العجز الأول\nالصدر الثاني ۞ العجز الثاني');
     setIsPoemModalOpen(true);
@@ -891,6 +1015,26 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     } catch (err) {
       console.error(err);
       showBanner('error', lang === 'ar' ? 'تعذر حفظ المنظومة' : 'Failed to save poem');
+    }
+  };
+
+  const togglePoemQuickFlag = async (p: Poem, patch: Partial<Poem>) => {
+    try {
+      const res = await authFetch(`/api/poetry/${p.id}`, {
+        method: 'PUT',
+        body: JSON.stringify(patch)
+      });
+      if (res.ok) {
+        onDataRefresh();
+        showBanner(
+          'success',
+          patch.featured
+            ? (lang === 'ar' ? 'تم إبراز المنظومة (تظهر أول ٣ منظومات مميزة في الواجهة الرئيسية)' : 'Poem featured (top 3 featured poems appear in Hero)')
+            : (lang === 'ar' ? 'تم تحديث حالة المنظومة' : 'Poem updated')
+        );
+      }
+    } catch {
+      showBanner('error', lang === 'ar' ? 'تعذر التحديث السريع' : 'Quick update failed');
     }
   };
 
@@ -1229,12 +1373,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
             <div>
               <label className="block text-xs font-readex font-medium text-[#1E1E1E] mb-1">
-                {lang === 'ar' ? 'كلمة المرور الجديدة (6 أحرف كحد أدنى)' : 'New Master Password (min 6 characters)'}
+                {lang === 'ar' ? 'كلمة المرور الجديدة (8 أحرف كحد أدنى)' : 'New Master Password (min 8 characters)'}
               </label>
               <input
                 type="password"
                 required
-                minLength={6}
+                minLength={8}
                 value={setupPassword}
                 onChange={e => setSetupPassword(e.target.value)}
                 placeholder="••••••••••••"
@@ -1249,7 +1393,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               <input
                 type="password"
                 required
-                minLength={6}
+                minLength={8}
                 value={confirmSetupPassword}
                 onChange={e => setConfirmSetupPassword(e.target.value)}
                 placeholder="••••••••••••"
@@ -1405,6 +1549,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     });
   const paginatedAudios = filteredAudios.slice((tabPage - 1) * effectivePageSize, tabPage * effectivePageSize);
 
+  const featuredPoemsCount = poems.filter(p => Boolean(p.featured)).length;
+
   const filteredPoems = poems
     .filter(p => {
       const matchesQ =
@@ -1413,7 +1559,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         p.meter.toLowerCase().includes(qLower) ||
         p.category.toLowerCase().includes(qLower);
       const matchesCat = filterCategory === 'all' || p.category === filterCategory;
-      return matchesQ && matchesCat;
+      const matchesFeature =
+        filterStatus === 'all'
+          ? true
+          : filterStatus === 'featured'
+          ? Boolean(p.featured)
+          : !p.featured;
+      return matchesQ && matchesCat && matchesFeature;
     })
     .sort((a, b) => {
       if (sortBy === 'title') return a.title.localeCompare(b.title);
@@ -1514,9 +1666,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           <button
             type="button"
             disabled={isApplyingBulk}
-            onClick={() =>
-              requestBatchDelete(activeTab as 'books' | 'audios' | 'poems' | 'articles' | 'questions')
-            }
+            onClick={() => {
+              const entity = (activeTab === 'poetry' ? 'poems' : activeTab) as
+                | 'books'
+                | 'audios'
+                | 'poems'
+                | 'articles'
+                | 'questions';
+              requestBatchDelete(entity);
+            }}
             className="px-3.5 py-1.5 rounded-xl bg-red-600 hover:bg-red-700 text-white font-bold flex items-center gap-1.5 disabled:opacity-50"
           >
             <Trash2 className="w-3.5 h-3.5" />
@@ -1713,6 +1871,24 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 {lang === 'ar' ? 'تطبيق' : 'Apply'}
               </button>
             )}
+
+            <button
+              type="button"
+              disabled={isApplyingBulk}
+              onClick={() => executeBatchUpdate('poems', { featured: true }, lang === 'ar' ? 'تم إبراز المنظومات المحددة في الواجهة' : 'Poems featured for Home Hero')}
+              className="px-2.5 py-1.5 rounded-lg bg-white/15 hover:bg-white/25 text-amber-200 font-semibold flex items-center gap-1"
+            >
+              <Star className="w-3 h-3" />
+              <span>{lang === 'ar' ? 'إبراز في الواجهة' : 'Feature'}</span>
+            </button>
+            <button
+              type="button"
+              disabled={isApplyingBulk}
+              onClick={() => executeBatchUpdate('poems', { featured: false }, lang === 'ar' ? 'تم إلغاء الإبراز من الواجهة' : 'Unfeatured from Home Hero')}
+              className="px-2.5 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-white/80 font-semibold"
+            >
+              {lang === 'ar' ? 'إلغاء الإبراز' : 'Unfeature'}
+            </button>
           </div>
         )}
 
@@ -2481,9 +2657,30 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       {activeTab === 'poetry' && (
         <div className="space-y-4">
           <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
-            <h3 className="font-amiri font-bold text-xl text-[#0F382C]">
-              {lang === 'ar' ? 'إدارة المنظومات والديوان الشعري' : 'Manage Poetry & Diwan'}
-            </h3>
+            <div className="flex flex-wrap items-center gap-2.5">
+              <h3 className="font-amiri font-bold text-xl text-[#0F382C]">
+                {lang === 'ar' ? 'إدارة المنظومات والديوان الشعري' : 'Manage Poetry & Diwan'}
+              </h3>
+              <span
+                className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-readex font-bold border ${
+                  featuredPoemsCount > 0
+                    ? 'bg-amber-50 text-amber-900 border-amber-200'
+                    : 'bg-[#F4EFE6] text-[#7A6440] border-[#E0D3BE]'
+                }`}
+                title={
+                  lang === 'ar'
+                    ? 'تُعرض أول ٣ منظومات مميزة في بطاقة الدرة الشعرية بالواجهة الرئيسية'
+                    : 'The top 3 featured poems are displayed in the Home Hero spotlight card'
+                }
+              >
+                <Star className={`w-3 h-3 ${featuredPoemsCount > 0 ? 'fill-amber-500 text-amber-600' : ''}`} />
+                <span>
+                  {lang === 'ar'
+                    ? `مميز في الواجهة: ${Math.min(featuredPoemsCount, 3)} / ٣${featuredPoemsCount > 3 ? ` (إجمالي المحدد: ${featuredPoemsCount})` : ''}`
+                    : `Hero Featured: ${Math.min(featuredPoemsCount, 3)} / 3${featuredPoemsCount > 3 ? ` (${featuredPoemsCount} marked)` : ''}`}
+                </span>
+              </span>
+            </div>
             <div className="flex flex-wrap items-center gap-2 font-readex text-xs">
               <div className="relative flex-1 min-w-[180px] sm:w-52">
                 <input
@@ -2505,6 +2702,16 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 {categories.map(c => (
                   <option key={c} value={c}>{translateCategory(c)}</option>
                 ))}
+              </select>
+
+              <select
+                value={filterStatus}
+                onChange={e => setFilterStatus(e.target.value)}
+                className="px-3 py-2 rounded-xl border border-[#E0D4C1] bg-white text-xs text-[#0F382C]"
+              >
+                <option value="all">{lang === 'ar' ? 'الكل (مميز وعادي)' : 'All (Featured & Normal)'}</option>
+                <option value="featured">{lang === 'ar' ? 'المميزة في الواجهة فقط' : 'Hero Featured Only'}</option>
+                <option value="normal">{lang === 'ar' ? 'غير المميزة فقط' : 'Normal Only'}</option>
               </select>
 
               <select
@@ -2554,13 +2761,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   <th className="p-3.5 font-bold">{lang === 'ar' ? 'التصنيف' : 'Category'}</th>
                   <th className="p-3.5 font-bold">{lang === 'ar' ? 'الأبيات' : 'Verses'}</th>
                   <th className="p-3.5 font-bold">{t('year')}</th>
+                  <th className="p-3.5 font-bold">{lang === 'ar' ? 'الواجهة الرئيسية' : 'Home Hero'}</th>
                   <th className="p-3.5 text-center font-bold">{lang === 'ar' ? 'الإجراءات' : 'Actions'}</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-[#EADFCB]/60">
                 {paginatedPoems.length === 0 ? (
                   <tr>
-                    <td colSpan={7} className="p-8 text-center text-[#8C6D3B]">
+                    <td colSpan={8} className="p-8 text-center text-[#8C6D3B]">
                       {lang === 'ar' ? 'لا توجد منظومات مطابقة' : 'No matching poems found'}
                     </td>
                   </tr>
@@ -2593,6 +2801,29 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                           {p.totalVerses} {t('verses_count')}
                         </td>
                         <td className="p-3.5 text-[#8C6D3B]">{p.year}</td>
+                        <td className="p-3.5">
+                          <button
+                            type="button"
+                            onClick={() => togglePoemQuickFlag(p, { featured: !p.featured })}
+                            title={
+                              lang === 'ar'
+                                ? 'تبديل الإبراز ضمن أبرز ٣ منظومات في الواجهة الرئيسية'
+                                : 'Toggle featuring this poem in the Home Hero (top 3)'
+                            }
+                            className={`inline-flex items-center gap-1 px-2.5 py-1 rounded text-[11px] font-bold transition ${
+                              p.featured
+                                ? 'bg-amber-100 text-amber-900 border border-amber-300'
+                                : 'bg-gray-100 text-gray-500 hover:bg-amber-50 hover:text-amber-700'
+                            }`}
+                          >
+                            <Star className={`w-3 h-3 ${p.featured ? 'fill-amber-600 text-amber-700' : ''}`} />
+                            <span>
+                              {lang === 'ar'
+                                ? (p.featured ? 'مميز في الواجهة' : 'عادي')
+                                : (p.featured ? 'Featured' : 'Normal')}
+                            </span>
+                          </button>
+                        </td>
                         <td className="p-3.5 text-center">
                           <div className="flex items-center justify-center gap-1">
                             <button
@@ -3640,90 +3871,197 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         </div>
       )}
 
-      {/* ================= 8. SECURITY & PASSWORD TAB ================= */}
+      {/* ================= 8. SECURITY, SESSIONS & PASSWORD TAB ================= */}
       {activeTab === 'security' && (
-        <form onSubmit={handleChangePassword} className="bg-white rounded-3xl border border-[#EADFCB] p-6 sm:p-8 shadow-xs space-y-5 max-w-xl">
-          <div className="flex items-center gap-2 mb-2">
-            <KeyRound className="w-5 h-5 text-[#0F382C]" />
-            <h3 className="font-amiri font-bold text-xl text-[#0F382C]">
-              {lang === 'ar' ? 'حماية الحساب وتغيير كلمة المرور' : 'Security & Change Master Password'}
-            </h3>
-          </div>
-
-          <p className="text-xs text-[#5A635E] font-readex leading-relaxed">
-            {lang === 'ar'
-              ? 'يتم تشفير كلمات المرور على الخادم بواسطة خوارزمية PBKDF2 المشددة مع Salt فريد لحماية بيانات المنصة بالكامل.'
-              : 'Passwords are cryptographically secured server-side using PBKDF2 with unique salts to protect scholarly data.'}
-          </p>
-
-          <div>
-            <label className="block text-xs font-readex font-medium mb-1">
-              {lang === 'ar' ? 'كلمة المرور الحالية' : 'Current Password'}
-            </label>
-            <input
-              type="password"
-              required
-              value={currentPassword}
-              onChange={e => setCurrentPassword(e.target.value)}
-              placeholder="••••••••••••"
-              className="w-full px-3.5 py-2.5 rounded-xl border border-[#E0D4C1] text-sm font-readex focus:outline-none focus:ring-2 focus:ring-[#0F382C]"
-            />
-          </div>
-
-          <div>
-            <label className="block text-xs font-readex font-medium mb-1">
-              {lang === 'ar' ? 'كلمة المرور الجديدة (6 خانات على الأقل)' : 'New Password (min 6 characters)'}
-            </label>
-            <input
-              type="password"
-              required
-              minLength={6}
-              value={newPassword}
-              onChange={e => setNewPassword(e.target.value)}
-              placeholder="••••••••••••"
-              className="w-full px-3.5 py-2.5 rounded-xl border border-[#E0D4C1] text-sm font-readex focus:outline-none focus:ring-2 focus:ring-[#0F382C]"
-            />
-          </div>
-
-          <div>
-            <label className="block text-xs font-readex font-medium mb-1">
-              {lang === 'ar' ? 'تأكيد كلمة المرور الجديدة' : 'Confirm New Password'}
-            </label>
-            <input
-              type="password"
-              required
-              minLength={6}
-              value={confirmNewPassword}
-              onChange={e => setConfirmNewPassword(e.target.value)}
-              placeholder="••••••••••••"
-              className="w-full px-3.5 py-2.5 rounded-xl border border-[#E0D4C1] text-sm font-readex focus:outline-none focus:ring-2 focus:ring-[#0F382C]"
-            />
-          </div>
-
-          {changePassError && (
-            <div className="p-3 rounded-xl bg-red-50 border border-red-200 text-red-700 text-xs font-readex flex items-center gap-1.5">
-              <AlertCircle className="w-4 h-4 shrink-0" />
-              <span>{changePassError}</span>
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+          <form onSubmit={handleChangePassword} className="lg:col-span-6 bg-white rounded-3xl border border-[#EADFCB] p-6 sm:p-8 shadow-xs space-y-5">
+            <div className="flex items-center gap-2 mb-2">
+              <KeyRound className="w-5 h-5 text-[#0F382C]" />
+              <h3 className="font-amiri font-bold text-xl text-[#0F382C]">
+                {lang === 'ar' ? 'حماية الحساب وتغيير كلمة المرور' : 'Security & Change Master Password'}
+              </h3>
             </div>
-          )}
 
-          {changePassSuccess && (
-            <div className="p-3 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-readex flex items-center gap-1.5">
-              <Check className="w-4 h-4 shrink-0 text-emerald-600" />
-              <span>{changePassSuccess}</span>
+            <p className="text-xs text-[#5A635E] font-readex leading-relaxed">
+              {lang === 'ar'
+                ? 'يتم تشفير كلمات المرور على الخادم بواسطة خوارزمية PBKDF2-SHA512 المشددة مع Salt فريد، ويُنهي تحديث كلمة المرور أي جلسات أخرى نشطة تلقائياً.'
+                : 'Passwords are cryptographically secured server-side using PBKDF2-SHA512 with unique salts. Updating your password automatically revokes all other active sessions.'}
+            </p>
+
+            <div>
+              <label className="block text-xs font-readex font-medium mb-1">
+                {lang === 'ar' ? 'كلمة المرور الحالية' : 'Current Password'}
+              </label>
+              <input
+                type="password"
+                required
+                value={currentPassword}
+                onChange={e => setCurrentPassword(e.target.value)}
+                placeholder="••••••••••••"
+                className="w-full px-3.5 py-2.5 rounded-xl border border-[#E0D4C1] text-sm font-readex focus:outline-none focus:ring-2 focus:ring-[#0F382C]"
+              />
             </div>
-          )}
 
-          <button
-            type="submit"
-            disabled={isChangingPass}
-            className="px-6 py-2.5 rounded-xl bg-[#0F382C] text-white font-readex text-xs font-bold shadow-xs hover:bg-[#164E3D] transition disabled:opacity-50"
-          >
-            {isChangingPass
-              ? (lang === 'ar' ? 'جاري التحديث...' : 'Updating...')
-              : (lang === 'ar' ? 'تحديث كلمة المرور' : 'Update Master Password')}
-          </button>
-        </form>
+            <div>
+              <label className="block text-xs font-readex font-medium mb-1">
+                {lang === 'ar' ? 'كلمة المرور الجديدة (8 خانات على الأقل)' : 'New Password (min 8 characters)'}
+              </label>
+              <input
+                type="password"
+                required
+                minLength={8}
+                value={newPassword}
+                onChange={e => setNewPassword(e.target.value)}
+                placeholder="••••••••••••"
+                className="w-full px-3.5 py-2.5 rounded-xl border border-[#E0D4C1] text-sm font-readex focus:outline-none focus:ring-2 focus:ring-[#0F382C]"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-readex font-medium mb-1">
+                {lang === 'ar' ? 'تأكيد كلمة المرور الجديدة' : 'Confirm New Password'}
+              </label>
+              <input
+                type="password"
+                required
+                minLength={8}
+                value={confirmNewPassword}
+                onChange={e => setConfirmNewPassword(e.target.value)}
+                placeholder="••••••••••••"
+                className="w-full px-3.5 py-2.5 rounded-xl border border-[#E0D4C1] text-sm font-readex focus:outline-none focus:ring-2 focus:ring-[#0F382C]"
+              />
+            </div>
+
+            {changePassError && (
+              <div className="p-3 rounded-xl bg-red-50 border border-red-200 text-red-700 text-xs font-readex flex items-center gap-1.5">
+                <AlertCircle className="w-4 h-4 shrink-0" />
+                <span>{changePassError}</span>
+              </div>
+            )}
+
+            {changePassSuccess && (
+              <div className="p-3 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-readex flex items-center gap-1.5">
+                <Check className="w-4 h-4 shrink-0 text-emerald-600" />
+                <span>{changePassSuccess}</span>
+              </div>
+            )}
+
+            <button
+              type="submit"
+              disabled={isChangingPass}
+              className="px-6 py-2.5 rounded-xl bg-[#0F382C] text-white font-readex text-xs font-bold shadow-xs hover:bg-[#164E3D] transition disabled:opacity-50"
+            >
+              {isChangingPass
+                ? (lang === 'ar' ? 'جاري التحديث...' : 'Updating...')
+                : (lang === 'ar' ? 'تحديث كلمة المرور' : 'Update Master Password')}
+            </button>
+          </form>
+
+          <div className="lg:col-span-6 space-y-5 font-readex">
+            {/* Security Posture */}
+            <div className="bg-white rounded-3xl border border-[#EADFCB] p-6 shadow-xs space-y-4">
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <Shield className="w-5 h-5 text-[#0F382C]" />
+                  <h3 className="font-amiri font-bold text-xl text-[#0F382C]">
+                    {lang === 'ar' ? 'حالة الحماية والبنية الأمنية' : 'Production Security Posture'}
+                  </h3>
+                </div>
+                <button
+                  type="button"
+                  onClick={fetchSecurityAndR2Meta}
+                  className="p-2 rounded-xl bg-[#FAF6EE] hover:bg-[#F2ECE1] text-[#0F382C] border border-[#E0D4C1]"
+                  title={lang === 'ar' ? 'تحديث' : 'Refresh'}
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${isLoadingSessions ? 'animate-spin' : ''}`} />
+                </button>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                <div className="p-3 rounded-2xl bg-[#FAF6EE] border border-[#E8DCC9]">
+                  <span className="text-[11px] text-[#8C6D3B] block">{lang === 'ar' ? 'تحديد معدل الطلبات خلف البروكسي' : 'Proxy Rate Limiting'}</span>
+                  <span className="font-bold text-[#0F382C]">
+                    {securityPosture?.trustProxy ? (lang === 'ar' ? 'مُفعّل (X-Forwarded-For)' : 'Active (Trust Proxy)') : '—'}
+                  </span>
+                </div>
+                <div className="p-3 rounded-2xl bg-[#FAF6EE] border border-[#E8DCC9]">
+                  <span className="text-[11px] text-[#8C6D3B] block">{lang === 'ar' ? 'حماية دخول الإدارة' : 'Login Lockout Policy'}</span>
+                  <span className="font-bold text-[#0F382C]">
+                    {securityPosture ? `${securityPosture.rateLimitMaxAttempts} ${lang === 'ar' ? 'محاولات /' : 'tries /'} ${securityPosture.rateLimitLockMinutes}m` : '5 tries / 5m'}
+                  </span>
+                </div>
+                <div className="p-3 rounded-2xl bg-[#FAF6EE] border border-[#E8DCC9]">
+                  <span className="text-[11px] text-[#8C6D3B] block">{lang === 'ar' ? 'فلترة أسئلة الطلاب (السبام)' : 'Q&A Moderation & Spam Guard'}</span>
+                  <span className="font-bold text-emerald-700">
+                    {lang === 'ar' ? `مُفعّل (${securityPosture?.questionLimitPer15Min ?? 5} أسئلة / 15د)` : `Active (${securityPosture?.questionLimitPer15Min ?? 5} / 15m)`}
+                  </span>
+                </div>
+                <div className="p-3 rounded-2xl bg-[#FAF6EE] border border-[#E8DCC9]">
+                  <span className="text-[11px] text-[#8C6D3B] block">{lang === 'ar' ? 'تخزين Cloudflare R2' : 'Cloudflare R2 Upload'}</span>
+                  <span className={`font-bold ${r2Configured ? 'text-emerald-700' : 'text-amber-700'}`}>
+                    {r2Configured
+                      ? (lang === 'ar' ? 'مهيأ ومتاح للرفع المباشر' : 'Configured for Direct Upload')
+                      : (lang === 'ar' ? 'غير مهيأ في البيئة' : 'Env Vars Not Configured')}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            {/* Active Admin Sessions */}
+            <div className="bg-white rounded-3xl border border-[#EADFCB] p-6 shadow-xs space-y-4">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <h4 className="font-amiri font-bold text-lg text-[#0F382C]">
+                    {lang === 'ar' ? `الجلسات النشطة (${activeSessions.length})` : `Active Admin Sessions (${activeSessions.length})`}
+                  </h4>
+                  <p className="text-[11px] text-[#8C6D3B]">
+                    {lang === 'ar' ? 'الأجهزة المسجل دخولها حالياً إلى لوحة التحكم' : 'Devices currently authenticated to the admin dashboard'}
+                  </p>
+                </div>
+
+                {activeSessions.length > 1 && (
+                  <button
+                    type="button"
+                    onClick={handleRevokeOtherSessions}
+                    className="px-3 py-1.5 rounded-xl bg-red-50 hover:bg-red-100 text-red-700 border border-red-200 text-xs font-bold transition"
+                  >
+                    {lang === 'ar' ? 'إنهاء الجلسات الأخرى' : 'Sign Out Others'}
+                  </button>
+                )}
+              </div>
+
+              <div className="space-y-2 max-h-60 overflow-y-auto">
+                {activeSessions.length === 0 ? (
+                  <p className="text-xs text-[#8C6D3B]">{lang === 'ar' ? 'لا توجد بيانات جلسات' : 'No session records'}</p>
+                ) : (
+                  activeSessions.map((sess, i) => (
+                    <div
+                      key={`${sess.idPrefix}-${i}`}
+                      className={`p-3 rounded-xl border flex items-center justify-between gap-2 text-xs ${
+                        sess.isCurrent ? 'bg-emerald-50/70 border-emerald-200' : 'bg-[#FDFBF7] border-[#E8DCC9]'
+                      }`}
+                    >
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <span dir="ltr" className="font-latin font-bold text-[#0F382C]">{sess.idPrefix}</span>
+                          {sess.isCurrent && (
+                            <span className="px-2 py-0.5 rounded-full bg-emerald-700 text-white text-[10px] font-bold">
+                              {lang === 'ar' ? 'الجلسة الحالية' : 'Current'}
+                            </span>
+                          )}
+                        </div>
+                        <span className="text-[11px] text-[#8C6D3B]">
+                          {lang === 'ar' ? 'تنتهي:' : 'Expires:'} {new Date(sess.expiresAt).toLocaleString()}
+                        </span>
+                      </div>
+                      <span className="text-[11px] font-bold text-[#0F382C]">{sess.username}</span>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* ================= 9. BULK IMPORT & R2 SYNC TAB ================= */}
@@ -3954,12 +4292,58 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   </label>
 
                   {editingBook.hasPdf && (
-                    <div>
-                      <label className="block text-[11px] text-[#8C6D3B] mb-1">
-                        {lang === 'ar' ? 'رابط ملف الـ PDF' : 'PDF Download URL'}
-                      </label>
+                    <div className="space-y-2">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <label className="block text-[11px] text-[#8C6D3B]">
+                          {lang === 'ar' ? 'رابط ملف الـ PDF أو رفعه إلى R2' : 'PDF Download URL or Upload to R2'}
+                        </label>
+                        <label
+                          className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-bold cursor-pointer transition ${
+                            uploadState?.target === 'book-pdf'
+                              ? 'bg-[#0F382C] text-white opacity-80 pointer-events-none'
+                              : 'bg-[#F4EFE6] hover:bg-[#E8DCC9] text-[#0F382C] border border-[#C5A880]/50'
+                          }`}
+                        >
+                          {uploadState?.target === 'book-pdf' ? (
+                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                          ) : (
+                            <Upload className="w-3.5 h-3.5 text-[#8C6D3B]" />
+                          )}
+                          <span>
+                            {uploadState?.target === 'book-pdf'
+                              ? `${lang === 'ar' ? 'جاري الرفع...' : 'Uploading...'} ${uploadState.progress}%`
+                              : (lang === 'ar' ? 'رفع PDF إلى R2' : 'Upload PDF to R2')}
+                          </span>
+                          <input
+                            type="file"
+                            accept=".pdf,application/pdf"
+                            className="hidden"
+                            onChange={async (e) => {
+                              const file = e.target.files?.[0];
+                              e.target.value = '';
+                              if (!file) return;
+                              try {
+                                const uploaded = await uploadFileToR2(file, {
+                                  kind: 'book',
+                                  target: 'book-pdf',
+                                });
+                                setEditingBook(prev =>
+                                  prev ? { ...prev, hasPdf: true, downloadUrl: uploaded.url } : prev
+                                );
+                                showBanner(
+                                  'success',
+                                  lang === 'ar' ? `تم رفع «${file.name}» إلى R2 بنجاح` : `Uploaded "${file.name}" to R2`
+                                );
+                              } catch (err) {
+                                showBanner('error', (err as Error).message || 'PDF upload failed');
+                              }
+                            }}
+                          />
+                        </label>
+                      </div>
                       <input
                         type="text"
+                        dir="ltr"
                         value={editingBook.downloadUrl || ''}
                         onChange={e => setEditingBook({ ...editingBook, downloadUrl: e.target.value })}
                         placeholder="https://... or #"
@@ -4177,7 +4561,41 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 />
               </div>
               <div>
-                <label className="block text-[11px] font-readex mb-1">{lang === 'ar' ? 'رابط متن الشرح (PDF)' : 'Matn PDF URL'}</label>
+                <div className="flex items-center justify-between gap-1 mb-1">
+                  <label className="block text-[11px] font-readex">{lang === 'ar' ? 'رابط متن الشرح (PDF)' : 'Matn PDF URL'}</label>
+                  <label className="inline-flex items-center gap-1 text-[10px] font-readex font-bold text-[#0F382C] hover:underline cursor-pointer">
+                    <Upload className="w-3 h-3 text-[#8C6D3B]" />
+                    <span>
+                      {uploadState?.target === 'audio-matn'
+                        ? `${uploadState.progress}%`
+                        : (lang === 'ar' ? 'رفع R2' : 'Upload')}
+                    </span>
+                    <input
+                      type="file"
+                      accept=".pdf,application/pdf"
+                      className="hidden"
+                      onChange={async (e) => {
+                        const file = e.target.files?.[0];
+                        e.target.value = '';
+                        if (!file) return;
+                        try {
+                          const uploaded = await uploadFileToR2(file, {
+                            kind: 'matn',
+                            prefix: editingAudio?.r2Prefix || editingAudio?.id || editingAudio?.title || 'general',
+                            target: 'audio-matn',
+                          });
+                          setEditingAudio(prev => (prev ? { ...prev, matnPdfUrl: uploaded.url } : prev));
+                          showBanner(
+                            'success',
+                            lang === 'ar' ? `تم رفع ملف المتن إلى R2` : `Matn PDF uploaded to R2`
+                          );
+                        } catch (err) {
+                          showBanner('error', (err as Error).message || 'Matn upload failed');
+                        }
+                      }}
+                    />
+                  </label>
+                </div>
                 <input
                   type="text"
                   dir="ltr"
@@ -4201,7 +4619,77 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     {(editingAudio.lessons || []).length} {lang === 'ar' ? 'دروس' : 'lessons'}
                   </span>
                 </div>
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2">
+                  <label
+                    className={`px-3 py-1.5 rounded-xl bg-amber-50 border border-amber-300 text-[#0F382C] text-xs font-readex font-bold flex items-center gap-1.5 hover:bg-amber-100 cursor-pointer transition ${
+                      uploadState?.target === 'audio-multi' ? 'opacity-70 pointer-events-none' : ''
+                    }`}
+                  >
+                    {uploadState?.target === 'audio-multi' ? (
+                      <Loader2 className="w-3.5 h-3.5 animate-spin text-[#0F382C]" />
+                    ) : (
+                      <Upload className="w-3.5 h-3.5 text-[#8C6D3B]" />
+                    )}
+                    <span>
+                      {uploadState?.target === 'audio-multi'
+                        ? `${uploadState.label} (${uploadState.progress}%)`
+                        : (lang === 'ar' ? 'رفع صوتيات إلى R2' : 'Upload Audios to R2')}
+                    </span>
+                    <input
+                      type="file"
+                      multiple
+                      accept="audio/*,.mp3,.m4a,.aac,.ogg,.opus,.wav,.flac"
+                      className="hidden"
+                      onChange={async (e) => {
+                        const files: File[] = e.target.files ? Array.from(e.target.files) : [];
+                        e.target.value = '';
+                        if (files.length === 0) return;
+                        const sortedFiles = [...files].sort((a, b) =>
+                          a.name.localeCompare(b.name, undefined, { numeric: true })
+                        );
+                        const addedLessons: AudioLesson[] = [];
+                        for (let i = 0; i < sortedFiles.length; i++) {
+                          const file = sortedFiles[i];
+                          try {
+                            const uploaded = await uploadFileToR2(file, {
+                              kind: 'audio',
+                              prefix: editingAudio?.r2Prefix || editingAudio?.id || editingAudio?.title || 'general',
+                              target: 'audio-multi',
+                              label: `${i + 1}/${sortedFiles.length}`,
+                            });
+                            const cleanTitle = file.name.replace(/\.[^.]+$/, '').replace(/[_]+/g, ' ').trim();
+                            addedLessons.push({
+                              id: `l-${Date.now()}-${i + 1}`,
+                              title: cleanTitle || (lang === 'ar' ? `الدرس ${i + 1}` : `Lesson ${i + 1}`),
+                              duration: '45:00',
+                              audioUrl: uploaded.url,
+                            });
+                          } catch (err) {
+                            showBanner('error', (err as Error).message || `Failed uploading ${file.name}`);
+                            break;
+                          }
+                        }
+                        if (addedLessons.length > 0) {
+                          setEditingAudio(prev => {
+                            if (!prev) return prev;
+                            const nextLessons = [...(prev.lessons || []), ...addedLessons];
+                            return {
+                              ...prev,
+                              lessons: nextLessons,
+                              totalLessons: nextLessons.length,
+                              audioUrl: nextLessons[0]?.audioUrl || prev.audioUrl || '',
+                            };
+                          });
+                          showBanner(
+                            'success',
+                            lang === 'ar'
+                              ? `تم رفع ${addedLessons.length} ملف صوتي إلى R2 وإضافتها للقائمة`
+                              : `Uploaded ${addedLessons.length} audio file(s) to R2`
+                          );
+                        }
+                      }}
+                    />
+                  </label>
                   <button
                     type="button"
                     onClick={() => setShowBulkLessonPaster(v => !v)}
@@ -4266,6 +4754,45 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         #{idx + 1}
                       </span>
                       <div className="flex items-center gap-1">
+                        <label
+                          className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-[#F4EFE6] hover:bg-[#E8DCC9] text-[#0F382C] font-bold text-[10px] cursor-pointer"
+                          title={lang === 'ar' ? 'رفع ملف صوتي لهذا الدرس عبر R2' : 'Upload audio to R2 for this lesson'}
+                        >
+                          {uploadState?.target === `lesson-${idx}` ? (
+                            <Loader2 className="w-3 h-3 animate-spin" />
+                          ) : (
+                            <Upload className="w-3 h-3 text-[#8C6D3B]" />
+                          )}
+                          <span>
+                            {uploadState?.target === `lesson-${idx}`
+                              ? `${uploadState.progress}%`
+                              : (lang === 'ar' ? 'رفع R2' : 'R2 Upload')}
+                          </span>
+                          <input
+                            type="file"
+                            accept="audio/*,.mp3,.m4a,.aac,.ogg,.opus,.wav,.flac"
+                            className="hidden"
+                            onChange={async (e) => {
+                              const file = e.target.files?.[0];
+                              e.target.value = '';
+                              if (!file) return;
+                              try {
+                                const uploaded = await uploadFileToR2(file, {
+                                  kind: 'audio',
+                                  prefix: editingAudio?.r2Prefix || editingAudio?.id || editingAudio?.title || 'general',
+                                  target: `lesson-${idx}`,
+                                });
+                                handleUpdateLessonField(idx, 'audioUrl', uploaded.url);
+                                showBanner(
+                                  'success',
+                                  lang === 'ar' ? `تم رفع ملف الدرس #${idx + 1} إلى R2` : `Uploaded lesson #${idx + 1} audio to R2`
+                                );
+                              } catch (err) {
+                                showBanner('error', (err as Error).message || 'Audio upload failed');
+                              }
+                            }}
+                          />
+                        </label>
                         <button
                           type="button"
                           onClick={() => handleMoveLesson(idx, 'up')}
@@ -4435,6 +4962,23 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 className="w-full p-3.5 rounded-xl border border-[#E0D4C1] font-amiri text-base leading-loose bg-white"
                 placeholder="بَدَأْتُ بِاسْمِ رَبِّنَا الرَّحْمَنِ ۞ مُصَلِّيًا عَلَى النَّبِيِّ الْعَدْنَانِ"
               />
+            </div>
+
+            <div className="p-3.5 rounded-2xl bg-[#FAF6EE] border border-[#EADFCB] flex items-center justify-between gap-3">
+              <label className="flex items-center gap-2.5 text-xs font-readex cursor-pointer text-[#0F382C] font-semibold">
+                <input
+                  type="checkbox"
+                  checked={Boolean(editingPoem.featured)}
+                  onChange={e => setEditingPoem({ ...editingPoem, featured: e.target.checked })}
+                  className="w-4 h-4 rounded accent-[#0F382C]"
+                />
+                <span>
+                  {lang === 'ar'
+                    ? 'إبراز هذه المنظومة في الواجهة الرئيسية (تُعرض أبرز ٣ منظومات مختارة)'
+                    : 'Feature this poem in the Home Hero spotlight (top 3 featured poems shown)'}
+                </span>
+              </label>
+              <Star className={`w-4 h-4 shrink-0 ${editingPoem.featured ? 'fill-amber-500 text-amber-600' : 'text-[#C5A880]'}`} />
             </div>
 
             <div className="flex items-center justify-end gap-3 pt-3 border-t border-[#EADFCB] font-readex text-xs">

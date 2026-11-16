@@ -77,6 +77,7 @@ export const poems = pgTable('poems', {
   year: text('year').default('١٤٤٦ هـ').notNull(),
   category: text('category').default('الأدب والأخلاق').notNull(),
   summary: text('summary').default('').notNull(),
+  featured: boolean('featured').default(false).notNull(),
   verses: jsonb('verses').$type<PoemVerse[]>().default([]).notNull(),
   createdAt: timestamp('created_at').defaultNow().notNull(),
 });

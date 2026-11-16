@@ -222,8 +222,11 @@ async function ensureSchemaDDL(pgPool: Pool): Promise<void> {
       category TEXT NOT NULL DEFAULT 'الأدب والأخلاق',
       summary TEXT NOT NULL DEFAULT '',
       verses JSONB NOT NULL DEFAULT '[]'::jsonb,
+      featured BOOLEAN NOT NULL DEFAULT FALSE,
       created_at TIMESTAMP NOT NULL DEFAULT NOW()
     );
+
+    ALTER TABLE poems ADD COLUMN IF NOT EXISTS featured BOOLEAN NOT NULL DEFAULT FALSE;
 
     CREATE TABLE IF NOT EXISTS articles (
       id TEXT PRIMARY KEY,
@@ -259,179 +262,241 @@ async function ensureSchemaDDL(pgPool: Pool): Promise<void> {
 }
 
 async function seedIfEmpty(pgPool: Pool, orm: DbInstance): Promise<void> {
-  if (!fs.existsSync(SEED_DB_PATH)) {
+  // Fast exit if catalog initialization has already been completed or intentionally preserved
+  const { rows: seededFlagRows } = await pgPool.query(
+    "SELECT value FROM site_settings WHERE key = 'catalogSeeded' LIMIT 1"
+  );
+  if (seededFlagRows.length > 0) {
     return;
   }
 
-  let seed: any;
-  try {
-    seed = JSON.parse(fs.readFileSync(SEED_DB_PATH, 'utf-8'));
-  } catch (err) {
-    console.error('[PostgreSQL] Failed parsing seed db.json:', err);
-    return;
+  let seed: any = null;
+  if (fs.existsSync(SEED_DB_PATH)) {
+    try {
+      seed = JSON.parse(fs.readFileSync(SEED_DB_PATH, 'utf-8'));
+    } catch (err) {
+      console.error('[PostgreSQL] Failed parsing seed db.json:', err);
+      seed = null;
+    }
   }
 
   const client = await pgPool.connect();
   try {
     await client.query('BEGIN');
 
-    // Seed site_settings keys only if missing
-    const settingsEntries: Array<[string, unknown]> = [
-      ['profile', seed.profile || {}],
-      ['categories', seed.categories || []],
-      ['levels', seed.levels || []],
-      ['schedule', seed.schedule || {}],
-    ];
-    if (seed.adminAuth) {
-      settingsEntries.push(['adminAuth', seed.adminAuth]);
+    // Re-check inside transaction to avoid race conditions
+    const { rows: txSeededRows } = await client.query(
+      "SELECT value FROM site_settings WHERE key = 'catalogSeeded' LIMIT 1"
+    );
+    if (txSeededRows.length > 0) {
+      await client.query('COMMIT');
+      return;
     }
 
-    for (const [key, value] of settingsEntries) {
-      await orm
-        .insert(schema.siteSettings)
-        .values({ key, value })
-        .onConflictDoNothing({ target: schema.siteSettings.key });
-    }
+    // Detect if this database already existed (e.g. admin settings or catalog rows already exist,
+    // or admin previously cleaned up demo catalog rows in production).
+    const { rows: existingSettings } = await client.query(
+      "SELECT key FROM site_settings WHERE key IN ('profile', 'adminAuth', 'categories', 'schedule')"
+    );
+    const { rows: countsRows } = await client.query(`
+      SELECT
+        (SELECT COUNT(*)::int FROM books) AS books_cnt,
+        (SELECT COUNT(*)::int FROM audio_courses) AS audios_cnt,
+        (SELECT COUNT(*)::int FROM poems) AS poems_cnt,
+        (SELECT COUNT(*)::int FROM articles) AS articles_cnt,
+        (SELECT COUNT(*)::int FROM student_questions) AS questions_cnt
+    `);
+    const counts = countsRows[0] || {};
+    const hasExistingCatalog =
+      (counts.books_cnt || 0) > 0 ||
+      (counts.audios_cnt || 0) > 0 ||
+      (counts.poems_cnt || 0) > 0 ||
+      (counts.articles_cnt || 0) > 0 ||
+      (counts.questions_cnt || 0) > 0;
+    const alreadyInitialized = existingSettings.length > 0 || hasExistingCatalog;
 
-    const { rows: bookCountRows } = await client.query('SELECT COUNT(*)::int AS cnt FROM books');
-    if (bookCountRows[0]?.cnt === 0 && Array.isArray(seed.books)) {
-      for (let i = 0; i < seed.books.length; i++) {
-        const b = seed.books[i];
+    // Ensure structural site_settings exist cleanly if missing (never overwriting existing settings)
+    if (seed) {
+      const settingsEntries: Array<[string, unknown]> = [
+        ['profile', seed.profile || {}],
+        ['categories', seed.categories || []],
+        ['levels', seed.levels || []],
+        ['schedule', seed.schedule || {}],
+      ];
+      if (seed.adminAuth) {
+        settingsEntries.push(['adminAuth', seed.adminAuth]);
+      }
+
+      for (const [key, value] of settingsEntries) {
         await orm
-          .insert(schema.books)
-          .values({
-            id: b.id,
-            sortOrder: i,
-            title: b.title || '',
-            subtitle: b.subtitle || '',
-            collaborative: Boolean(b.collaborative),
-            collaborators: b.collaborators || '',
-            status: b.status || 'مخطوط',
-            category: b.category || 'العقيدة والتوحيد',
-            pages: Number(b.pages) || 0,
-            year: b.year || '١٤٤٦ هـ',
-            description: b.description || '',
-            downloadUrl: b.downloadUrl || '#',
-            hasPdf: Boolean(b.hasPdf),
-            isPaid: Boolean(b.isPaid),
-            price: b.price || '',
-            featured: Boolean(b.featured),
-          })
-          .onConflictDoNothing({ target: schema.books.id });
+          .insert(schema.siteSettings)
+          .values({ key, value })
+          .onConflictDoNothing({ target: schema.siteSettings.key });
       }
     }
 
-    // Seed all catalog audio courses idempotently (adds missing catalog courses without overwriting user edits)
-    if (Array.isArray(seed.audios)) {
-      for (let i = 0; i < seed.audios.length; i++) {
-        const a = seed.audios[i];
-        const lessons = Array.isArray(a.lessons) ? a.lessons : [];
-        const insertedCourse = await orm
-          .insert(schema.audioCourses)
-          .values({
-            id: a.id,
-            sortOrder: i,
-            title: a.title || '',
-            series: a.series || 'سلسلة عامة',
-            category: a.category || 'العقيدة والتوحيد',
-            level: a.level || 'مبتدئ',
-            levelId: a.levelId || 'beginner',
-            status: a.status || 'درس مستمر',
-            totalLessons: lessons.length,
-            expectedLessons: a.expectedLessons ?? null,
-            duration: a.duration || '٤٥ دقيقة لكل درس',
-            description: a.description || '',
-            audioUrl: lessons[0]?.audioUrl || a.audioUrl || '',
-            driveFolderId: a.driveFolderId ?? null,
-            driveFolderUrl: a.driveFolderUrl ?? null,
-            r2Prefix: a.r2Prefix ?? null,
-            matnTitle: a.matnTitle ?? null,
-            matnPdfUrl: a.matnPdfUrl ?? null,
-          })
-          .onConflictDoNothing({ target: schema.audioCourses.id })
-          .returning({ id: schema.audioCourses.id });
+    const isProduction = process.env.NODE_ENV === 'production';
+    const shouldSeedCatalog =
+      !alreadyInitialized &&
+      Boolean(seed) &&
+      (isProduction
+        ? process.env.SEED_DEMO_DATA === 'true'
+        : process.env.DISABLE_AUTO_SEED !== 'true');
 
-        // Only insert seed lessons if this course row was newly inserted
-        if (insertedCourse.length > 0 && lessons.length > 0) {
-          for (let j = 0; j < lessons.length; j++) {
-            const l = lessons[j];
-            await orm
-              .insert(schema.audioLessons)
-              .values({
-                id: l.id,
-                courseId: a.id,
-                sortOrder: j,
-                title: l.title || `الدرس ${j + 1}`,
-                duration: l.duration || '45:00',
-                audioUrl: l.audioUrl || '',
-              })
-              .onConflictDoNothing({ target: schema.audioLessons.id });
+    if (shouldSeedCatalog && seed) {
+      if (Array.isArray(seed.books)) {
+        for (let i = 0; i < seed.books.length; i++) {
+          const b = seed.books[i];
+          await orm
+            .insert(schema.books)
+            .values({
+              id: b.id,
+              sortOrder: i,
+              title: b.title || '',
+              subtitle: b.subtitle || '',
+              collaborative: Boolean(b.collaborative),
+              collaborators: b.collaborators || '',
+              status: b.status || 'مخطوط',
+              category: b.category || 'العقيدة والتوحيد',
+              pages: Number(b.pages) || 0,
+              year: b.year || '١٤٤٦ هـ',
+              description: b.description || '',
+              downloadUrl: b.downloadUrl || '#',
+              hasPdf: Boolean(b.hasPdf),
+              isPaid: Boolean(b.isPaid),
+              price: b.price || '',
+              featured: Boolean(b.featured),
+            })
+            .onConflictDoNothing({ target: schema.books.id });
+        }
+      }
+
+      if (Array.isArray(seed.audios)) {
+        for (let i = 0; i < seed.audios.length; i++) {
+          const a = seed.audios[i];
+          const lessons = Array.isArray(a.lessons) ? a.lessons : [];
+          const insertedCourse = await orm
+            .insert(schema.audioCourses)
+            .values({
+              id: a.id,
+              sortOrder: i,
+              title: a.title || '',
+              series: a.series || 'سلسلة عامة',
+              category: a.category || 'العقيدة والتوحيد',
+              level: a.level || 'مبتدئ',
+              levelId: a.levelId || 'beginner',
+              status: a.status || 'درس مستمر',
+              totalLessons: lessons.length,
+              expectedLessons: a.expectedLessons ?? null,
+              duration: a.duration || '٤٥ دقيقة لكل درس',
+              description: a.description || '',
+              audioUrl: lessons[0]?.audioUrl || a.audioUrl || '',
+              driveFolderId: a.driveFolderId ?? null,
+              driveFolderUrl: a.driveFolderUrl ?? null,
+              r2Prefix: a.r2Prefix ?? null,
+              matnTitle: a.matnTitle ?? null,
+              matnPdfUrl: a.matnPdfUrl ?? null,
+            })
+            .onConflictDoNothing({ target: schema.audioCourses.id })
+            .returning({ id: schema.audioCourses.id });
+
+          if (insertedCourse.length > 0 && lessons.length > 0) {
+            for (let j = 0; j < lessons.length; j++) {
+              const l = lessons[j];
+              await orm
+                .insert(schema.audioLessons)
+                .values({
+                  id: l.id,
+                  courseId: a.id,
+                  sortOrder: j,
+                  title: l.title || `الدرس ${j + 1}`,
+                  duration: l.duration || '45:00',
+                  audioUrl: l.audioUrl || '',
+                })
+                .onConflictDoNothing({ target: schema.audioLessons.id });
+            }
           }
         }
       }
+
+      if (Array.isArray(seed.poems)) {
+        for (let i = 0; i < seed.poems.length; i++) {
+          const p = seed.poems[i];
+          await orm
+            .insert(schema.poems)
+            .values({
+              id: p.id,
+              sortOrder: i,
+              title: p.title || '',
+              meter: p.meter || 'بحر الرجز',
+              totalVerses: Number(p.totalVerses) || (Array.isArray(p.verses) ? p.verses.length : 0),
+              year: p.year || '١٤٤٦ هـ',
+              category: p.category || 'الأدب والأخلاق',
+              summary: p.summary || '',
+              verses: Array.isArray(p.verses) ? p.verses : [],
+              featured: Boolean(p.featured),
+            })
+            .onConflictDoNothing({ target: schema.poems.id });
+        }
+      }
+
+      if (Array.isArray(seed.articles)) {
+        for (let i = 0; i < seed.articles.length; i++) {
+          const art = seed.articles[i];
+          await orm
+            .insert(schema.articles)
+            .values({
+              id: art.id,
+              sortOrder: i,
+              title: art.title || '',
+              type: art.type || 'خواطر ابن بيضاء',
+              category: art.category || 'الأدب والبلاغة واللغة',
+              date: art.date || '',
+              views: Number(art.views) || 1,
+              tags: Array.isArray(art.tags) ? art.tags : [],
+              summary: art.summary || '',
+              content: art.content || '',
+            })
+            .onConflictDoNothing({ target: schema.articles.id });
+        }
+      }
+
+      if (Array.isArray(seed.questions)) {
+        for (let i = 0; i < seed.questions.length; i++) {
+          const q = seed.questions[i];
+          await orm
+            .insert(schema.studentQuestions)
+            .values({
+              id: q.id,
+              sortOrder: i,
+              studentName: q.studentName || 'طالب علم',
+              question: q.question || '',
+              answer: q.answer ?? null,
+              date: q.date || '',
+              category: q.category || 'سؤال عام',
+            })
+            .onConflictDoNothing({ target: schema.studentQuestions.id });
+        }
+      }
+      console.log('[Storage] Initialized PostgreSQL catalog from seed data.');
+    } else if (alreadyInitialized) {
+      console.log('[Storage] Existing database detected — demo catalog auto-seeding skipped and cleanup/edits preserved.');
+    } else {
+      console.log('[Storage] Production virgin database initialized empty (set SEED_DEMO_DATA=true only if demo catalog seeding is desired).');
     }
 
-    const { rows: poemCountRows } = await client.query('SELECT COUNT(*)::int AS cnt FROM poems');
-    if (poemCountRows[0]?.cnt === 0 && Array.isArray(seed.poems)) {
-      for (let i = 0; i < seed.poems.length; i++) {
-        const p = seed.poems[i];
-        await orm
-          .insert(schema.poems)
-          .values({
-            id: p.id,
-            sortOrder: i,
-            title: p.title || '',
-            meter: p.meter || 'بحر الرجز',
-            totalVerses: Number(p.totalVerses) || (Array.isArray(p.verses) ? p.verses.length : 0),
-            year: p.year || '١٤٤٦ هـ',
-            category: p.category || 'الأدب والأخلاق',
-            summary: p.summary || '',
-            verses: Array.isArray(p.verses) ? p.verses : [],
-          })
-          .onConflictDoNothing({ target: schema.poems.id });
-      }
-    }
-
-    const { rows: artCountRows } = await client.query('SELECT COUNT(*)::int AS cnt FROM articles');
-    if (artCountRows[0]?.cnt === 0 && Array.isArray(seed.articles)) {
-      for (let i = 0; i < seed.articles.length; i++) {
-        const art = seed.articles[i];
-        await orm
-          .insert(schema.articles)
-          .values({
-            id: art.id,
-            sortOrder: i,
-            title: art.title || '',
-            type: art.type || 'خواطر ابن بيضاء',
-            category: art.category || 'الأدب والبلاغة واللغة',
-            date: art.date || '',
-            views: Number(art.views) || 1,
-            tags: Array.isArray(art.tags) ? art.tags : [],
-            summary: art.summary || '',
-            content: art.content || '',
-          })
-          .onConflictDoNothing({ target: schema.articles.id });
-      }
-    }
-
-    const { rows: qCountRows } = await client.query('SELECT COUNT(*)::int AS cnt FROM student_questions');
-    if (qCountRows[0]?.cnt === 0 && Array.isArray(seed.questions)) {
-      for (let i = 0; i < seed.questions.length; i++) {
-        const q = seed.questions[i];
-        await orm
-          .insert(schema.studentQuestions)
-          .values({
-            id: q.id,
-            sortOrder: i,
-            studentName: q.studentName || 'طالب علم',
-            question: q.question || '',
-            answer: q.answer ?? null,
-            date: q.date || '',
-            category: q.category || 'سؤال عام',
-          })
-          .onConflictDoNothing({ target: schema.studentQuestions.id });
-      }
-    }
+    // Persist marker so catalog auto-seeding can NEVER re-run on future deploys/restarts
+    await orm
+      .insert(schema.siteSettings)
+      .values({
+        key: 'catalogSeeded',
+        value: {
+          seeded: shouldSeedCatalog,
+          preservedExisting: alreadyInitialized,
+          initializedAt: new Date().toISOString(),
+        },
+      })
+      .onConflictDoNothing({ target: schema.siteSettings.key });
 
     await client.query('COMMIT');
   } catch (err) {

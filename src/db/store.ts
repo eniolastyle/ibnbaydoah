@@ -324,6 +324,67 @@ class DataStore {
     await pg.db.delete(schema.adminSessions).where(eq(schema.adminSessions.token, token));
   }
 
+  async listActiveSessions(
+    currentToken?: string
+  ): Promise<Array<{ idPrefix: string; username: string; expiresAt: number; isCurrent: boolean }>> {
+    const now = Date.now();
+    const pg = getPg();
+    if (!pg) {
+      const list: Array<{ idPrefix: string; username: string; expiresAt: number; isCurrent: boolean }> = [];
+      let changed = false;
+      for (const [token, sess] of this.jsonSessions.entries()) {
+        if (sess.expiresAt <= now) {
+          this.jsonSessions.delete(token);
+          changed = true;
+          continue;
+        }
+        list.push({
+          idPrefix: `${token.slice(0, 8)}…${token.slice(-4)}`,
+          username: sess.username,
+          expiresAt: sess.expiresAt,
+          isCurrent: Boolean(currentToken && token === currentToken),
+        });
+      }
+      if (changed) this.saveJsonSessions();
+      return list.sort((a, b) => b.expiresAt - a.expiresAt);
+    }
+
+    await pg.db.delete(schema.adminSessions).where(sql`${schema.adminSessions.expiresAt} <= ${now}`);
+    const rows = await pg.db
+      .select()
+      .from(schema.adminSessions)
+      .where(gt(schema.adminSessions.expiresAt, now));
+    return rows
+      .map((r) => ({
+        idPrefix: `${r.token.slice(0, 8)}…${r.token.slice(-4)}`,
+        username: r.username,
+        expiresAt: r.expiresAt,
+        isCurrent: Boolean(currentToken && r.token === currentToken),
+      }))
+      .sort((a, b) => b.expiresAt - a.expiresAt);
+  }
+
+  async revokeOtherSessions(currentToken: string): Promise<number> {
+    const pg = getPg();
+    if (!pg) {
+      let revoked = 0;
+      for (const token of Array.from(this.jsonSessions.keys())) {
+        if (token !== currentToken) {
+          this.jsonSessions.delete(token);
+          revoked++;
+        }
+      }
+      if (revoked > 0) this.saveJsonSessions();
+      return revoked;
+    }
+
+    const res = await pg.db
+      .delete(schema.adminSessions)
+      .where(sql`${schema.adminSessions.token} <> ${currentToken}`)
+      .returning({ token: schema.adminSessions.token });
+    return res.length;
+  }
+
   // ==================== PROFILE, CATEGORIES, SCHEDULE ====================
   async getProfile(): Promise<Profile> {
     const fallback = getPg() ? ({} as Profile) : (this.jsonCache || this.loadJsonFallback()).profile;
@@ -783,7 +844,10 @@ class DataStore {
   async getPoems(): Promise<Poem[]> {
     const pg = getPg();
     if (!pg) {
-      return (this.jsonCache || this.loadJsonFallback()).poems;
+      return (this.jsonCache || this.loadJsonFallback()).poems.map((p) => ({
+        ...p,
+        featured: Boolean(p.featured),
+      }));
     }
     const rows = await pg.db.select().from(schema.poems).orderBy(asc(schema.poems.sortOrder));
     return rows.map((r) => ({
@@ -795,30 +859,36 @@ class DataStore {
       category: r.category,
       summary: r.summary,
       verses: Array.isArray(r.verses) ? r.verses : [],
+      featured: Boolean(r.featured),
     }));
   }
 
   async createPoem(poem: Poem): Promise<Poem> {
+    const normalized: Poem = {
+      ...poem,
+      featured: Boolean(poem.featured),
+    };
     const pg = getPg();
     if (!pg) {
       const cache = this.jsonCache || this.loadJsonFallback();
-      cache.poems.unshift(poem);
+      cache.poems.unshift(normalized);
       this.saveJsonFallback();
-      return poem;
+      return normalized;
     }
     const sortOrder = await this.getMinSortOrder('poems');
     await pg.db.insert(schema.poems).values({
-      id: poem.id,
+      id: normalized.id,
       sortOrder,
-      title: poem.title,
-      meter: poem.meter,
-      totalVerses: poem.totalVerses,
-      year: poem.year,
-      category: poem.category,
-      summary: poem.summary,
-      verses: poem.verses || [],
+      title: normalized.title,
+      meter: normalized.meter,
+      totalVerses: normalized.totalVerses,
+      year: normalized.year,
+      category: normalized.category,
+      summary: normalized.summary,
+      verses: normalized.verses || [],
+      featured: Boolean(normalized.featured),
     });
-    return poem;
+    return normalized;
   }
 
   async updatePoem(id: string, patch: Partial<Poem>): Promise<Poem | null> {
@@ -835,6 +905,10 @@ class DataStore {
         verses,
         totalVerses:
           verses.length || Number(patch.totalVerses) || cache.poems[idx].totalVerses || 0,
+        featured:
+          patch.featured !== undefined
+            ? Boolean(patch.featured)
+            : Boolean(cache.poems[idx].featured),
       };
       this.saveJsonFallback();
       return cache.poems[idx];
@@ -853,6 +927,8 @@ class DataStore {
       category: patch.category ?? cur.category,
       summary: patch.summary ?? cur.summary,
       verses,
+      featured:
+        patch.featured !== undefined ? Boolean(patch.featured) : Boolean(cur.featured),
     };
     await pg.db
       .update(schema.poems)
@@ -864,6 +940,7 @@ class DataStore {
         category: next.category,
         summary: next.summary,
         verses: next.verses,
+        featured: Boolean(next.featured),
       })
       .where(eq(schema.poems.id, id));
     return next;
@@ -998,6 +1075,41 @@ class DataStore {
       return;
     }
     await pg.db.delete(schema.articles).where(eq(schema.articles.id, id));
+  }
+
+  async incrementArticleViews(id: string): Promise<Article | null> {
+    const pg = getPg();
+    if (!pg) {
+      const cache = this.jsonCache || this.loadJsonFallback();
+      const idx = cache.articles.findIndex((a) => a.id === id);
+      if (idx === -1) return null;
+      const nextViews = Math.max(0, Number(cache.articles[idx].views || 0)) + 1;
+      cache.articles[idx] = { ...cache.articles[idx], views: nextViews };
+      this.saveJsonFallback();
+      return cache.articles[idx];
+    }
+
+    const updatedRows = await pg.db
+      .update(schema.articles)
+      .set({
+        views: sql`COALESCE(${schema.articles.views}, 0) + 1`,
+      })
+      .where(eq(schema.articles.id, id))
+      .returning();
+
+    if (updatedRows.length === 0) return null;
+    const r = updatedRows[0];
+    return {
+      id: r.id,
+      title: r.title,
+      type: (r.type as Article['type']) || 'خواطر ابن بيضاء',
+      category: (r.category as Article['category']) || 'الأدب والبلاغة واللغة',
+      date: r.date,
+      views: r.views,
+      tags: Array.isArray(r.tags) ? r.tags : [],
+      summary: r.summary,
+      content: r.content,
+    };
   }
 
   async upsertArticlesBatch(
@@ -1264,6 +1376,7 @@ class DataStore {
           return {
             ...p,
             ...(patch.category ? { category: patch.category } : {}),
+            ...(patch.featured !== undefined ? { featured: Boolean(patch.featured) } : {}),
           };
         });
       } else if (params.entity === 'articles') {
@@ -1330,8 +1443,11 @@ class DataStore {
     }
 
     if (params.entity === 'poems') {
-      if (!patch.category) return { affected: 0 };
-      const res = await pg.db.update(schema.poems).set({ category: patch.category }).where(inArray(schema.poems.id, ids)).returning({ id: schema.poems.id });
+      const setPayload: Partial<typeof schema.poems.$inferInsert> = {};
+      if (patch.category) setPayload.category = patch.category;
+      if (patch.featured !== undefined) setPayload.featured = Boolean(patch.featured);
+      if (Object.keys(setPayload).length === 0) return { affected: 0 };
+      const res = await pg.db.update(schema.poems).set(setPayload).where(inArray(schema.poems.id, ids)).returning({ id: schema.poems.id });
       return { affected: res.length };
     }
 

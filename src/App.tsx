@@ -23,7 +23,7 @@ import {
   copyShareUrl,
   isValidTab
 } from './utils/routing';
-import { ArrowRight, ChevronLeft, Home, Share2, Check } from 'lucide-react';
+import { ArrowRight, ChevronLeft, Home, Share2, Check, Eye } from 'lucide-react';
 import {
   Profile,
   Book,
@@ -110,6 +110,12 @@ function MainContent() {
 
   const loadAllData = async () => {
     try {
+      const adminToken =
+        typeof window !== 'undefined' ? localStorage.getItem('ibn_baydoah_admin_token') : null;
+      const questionHeaders: HeadersInit = adminToken
+        ? { Authorization: `Bearer ${adminToken}` }
+        : {};
+
       const [
         profileRes,
         booksRes,
@@ -126,7 +132,7 @@ function MainContent() {
         fetch('/api/poetry').then(r => r.json()).catch(() => null),
         fetch('/api/articles').then(r => r.json()).catch(() => null),
         fetch('/api/schedule').then(r => r.json()).catch(() => null),
-        fetch('/api/questions').then(r => r.json()).catch(() => null),
+        fetch('/api/questions', { headers: questionHeaders }).then(r => r.json()).catch(() => null),
         fetch('/api/stats').then(r => r.json()).catch(() => null)
       ]);
 
@@ -291,7 +297,9 @@ function MainContent() {
   };
 
   const handleQuestionSubmitted = (newQ: StudentQuestion) => {
-    setQuestions(prev => [newQ, ...prev]);
+    if (newQ.answer && newQ.answer.trim().length > 0) {
+      setQuestions(prev => [newQ, ...prev]);
+    }
   };
 
   const sectionLabelMap: Record<AppTab, string> = {
@@ -509,45 +517,40 @@ function MainContent() {
                     </button>
                   </div>
 
-                  {poems[0] && (
-                    <div
-                      onClick={() => navigateTo('poetry', poems[0].id)}
-                      className="p-5 rounded-2xl bg-[#FAF6EE] border border-[#E8DCC9] cursor-pointer hover:border-[#0F382C]/50 transition"
-                    >
-                      <div className="flex items-center justify-between text-xs font-readex text-[#8C6D3B] mb-2 font-medium">
-                        <span>{translateMeter(poems[0].meter)}</span>
-                        <span>{poems[0].totalVerses} {t('verses_count')}</span>
-                      </div>
-                      <h4 className="font-amiri font-bold text-xl text-[#0F382C] mb-2">
-                        {poems[0].title}
-                      </h4>
-                      {poems[0].verses[0] && (
-                        <div dir="rtl" className="p-4 bg-white rounded-xl border border-[#E8DCC9] text-center font-amiri text-sm sm:text-base text-[#0F382C] leading-loose shadow-2xs">
-                          {poems[0].verses[0].sadr} ۞ {poems[0].verses[0].ajuz}
+                  {(() => {
+                    const featuredHomePoems = (
+                      poems.some(p => p.featured) ? poems.filter(p => p.featured) : poems
+                    ).slice(0, 3);
+                    if (featuredHomePoems.length === 0) {
+                      return (
+                        <div className="p-6 rounded-2xl bg-[#FAF6EE] border border-[#E8DCC9] text-center font-readex text-xs text-[#7A6440]">
+                          {lang === 'ar'
+                            ? 'لا توجد منظومات منشورة في الديوان حالياً.'
+                            : 'No didactic poems are currently published.'}
                         </div>
-                      )}
-                    </div>
-                  )}
-
-                  {poems[1] && (
-                    <div
-                      onClick={() => navigateTo('poetry', poems[1].id)}
-                      className="p-5 rounded-2xl bg-[#FAF6EE] border border-[#E8DCC9] cursor-pointer hover:border-[#0F382C]/50 transition"
-                    >
-                      <div className="flex items-center justify-between text-xs font-readex text-[#8C6D3B] mb-2 font-medium">
-                        <span>{translateMeter(poems[1].meter)}</span>
-                        <span>{poems[1].totalVerses} {t('verses_count')}</span>
-                      </div>
-                      <h4 className="font-amiri font-bold text-xl text-[#0F382C] mb-2">
-                        {poems[1].title}
-                      </h4>
-                      {poems[1].verses[0] && (
-                        <div dir="rtl" className="p-4 bg-white rounded-xl border border-[#E8DCC9] text-center font-amiri text-sm sm:text-base text-[#0F382C] leading-loose shadow-2xs">
-                          {poems[1].verses[0].sadr} ۞ {poems[1].verses[0].ajuz}
+                      );
+                    }
+                    return featuredHomePoems.map(poem => (
+                      <div
+                        key={poem.id}
+                        onClick={() => navigateTo('poetry', poem.id)}
+                        className="p-5 rounded-2xl bg-[#FAF6EE] border border-[#E8DCC9] cursor-pointer hover:border-[#0F382C]/50 transition"
+                      >
+                        <div className="flex items-center justify-between text-xs font-readex text-[#8C6D3B] mb-2 font-medium">
+                          <span>{translateMeter(poem.meter)}</span>
+                          <span>{poem.totalVerses || poem.verses?.length || 0} {t('verses_count')}</span>
                         </div>
-                      )}
-                    </div>
-                  )}
+                        <h4 className="font-amiri font-bold text-xl text-[#0F382C] mb-2">
+                          {poem.title}
+                        </h4>
+                        {poem.verses?.[0] && (
+                          <div dir="rtl" className="p-4 bg-white rounded-xl border border-[#E8DCC9] text-center font-amiri text-sm sm:text-base text-[#0F382C] leading-loose shadow-2xs">
+                            {poem.verses[0].sadr} ۞ {poem.verses[0].ajuz}
+                          </div>
+                        )}
+                      </div>
+                    ));
+                  })()}
                 </div>
 
                 {/* Daily Reflections Highlight */}
@@ -578,7 +581,13 @@ function MainContent() {
                       >
                         <div className="flex items-center justify-between text-xs font-readex text-[#8C6D3B] mb-2 font-medium">
                           <span className="font-semibold text-[#0F382C]">{translateArticleType(art.type)}</span>
-                          <span>{art.date}</span>
+                          <span className="flex items-center gap-3">
+                            <span className="flex items-center gap-1 text-[#0F382C]">
+                              <Eye className="w-3.5 h-3.5 text-[#A58455]" />
+                              <span>{art.views || 1}</span>
+                            </span>
+                            <span>{art.date}</span>
+                          </span>
                         </div>
                         <h4 className="font-amiri font-bold text-xl text-[#0F382C] mb-1.5">
                           {art.title}
@@ -639,6 +648,9 @@ function MainContent() {
               articles={articles}
               initialArticleId={activeItemId}
               onSelectArticle={(articleId) => navigateTo('articles', articleId)}
+              onArticleViewed={(articleId, views) =>
+                setArticles(prev => prev.map(a => (a.id === articleId ? { ...a, views } : a)))
+              }
             />
           </div>
         )}

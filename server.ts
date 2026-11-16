@@ -13,6 +13,7 @@ import {
   importTelegramExport,
   importUniversalBulk,
   syncFromR2Bucket,
+  uploadFileToR2,
 } from './server/bulk.ts';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -24,10 +25,29 @@ const PORT = nginxConflict
   ? Number(process.env.DEFAULT_APP_PORT) || 3000
   : Number(process.env.PORT) || 3000;
 
+// Trust first reverse proxy (Coolify / Traefik / Nginx) so req.ip reflects real visitor IP
+app.set('trust proxy', 1);
+
+app.use((_req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+  next();
+});
+
 app.use(express.json({ limit: '25mb' }));
 
-// In-memory rate limiting against brute-force attacks
+// In-memory rate limiting against brute-force login & Q&A spam
 const loginAttempts = new Map<string, { count: number; lockedUntil: number }>();
+const questionSubmissions = new Map<string, number[]>();
+const articleViewDedupe = new Map<string, number>();
+const QUESTION_WINDOW_MS = 15 * 60 * 1000;
+const QUESTION_MAX_PER_WINDOW = 5;
+const ARTICLE_VIEW_WINDOW_MS = 5 * 60 * 1000;
+
+function getClientIp(req: express.Request): string {
+  return req.ip || req.socket.remoteAddress || 'unknown';
+}
 
 function checkRateLimit(ip: string): { allowed: boolean; remainingSeconds?: number } {
   const now = Date.now();
@@ -41,6 +61,10 @@ function checkRateLimit(ip: string): { allowed: boolean; remainingSeconds?: numb
 function recordFailedAttempt(ip: string) {
   const now = Date.now();
   const attempt = loginAttempts.get(ip) || { count: 0, lockedUntil: 0 };
+  if (attempt.lockedUntil > 0 && attempt.lockedUntil <= now) {
+    attempt.count = 0;
+    attempt.lockedUntil = 0;
+  }
   attempt.count += 1;
   if (attempt.count >= 5) {
     attempt.lockedUntil = now + 5 * 60 * 1000;
@@ -52,23 +76,65 @@ function resetAttempts(ip: string) {
   loginAttempts.delete(ip);
 }
 
+function checkQuestionRateLimit(ip: string): { allowed: boolean; remainingMinutes?: number } {
+  const now = Date.now();
+  const recent = (questionSubmissions.get(ip) || []).filter((ts) => now - ts < QUESTION_WINDOW_MS);
+  if (recent.length >= QUESTION_MAX_PER_WINDOW) {
+    const oldest = recent[0];
+    const remainingMs = Math.max(1000, QUESTION_WINDOW_MS - (now - oldest));
+    return { allowed: false, remainingMinutes: Math.ceil(remainingMs / 60000) };
+  }
+  recent.push(now);
+  questionSubmissions.set(ip, recent);
+  return { allowed: true };
+}
+
 function hashPassword(password: string, salt: string): string {
   return crypto.pbkdf2Sync(password, salt, 10000, 64, 'sha512').toString('hex');
 }
 
 async function ensureAdminInitialized(): Promise<AdminAuthData> {
   const existing = await dataStore.getAdminAuth();
-  if (existing && existing.hash && existing.salt) {
+  if (existing && (existing.hash || !existing.isConfigured)) {
     return existing;
   }
-  const salt = crypto.randomBytes(16).toString('hex');
+  const username = process.env.ADMIN_USERNAME?.trim() || existing?.username || 'admin';
   const envPass = process.env.ADMIN_PASSWORD?.trim();
-  const initialPass = envPass || 'baydoah1446';
+  const isProduction = process.env.NODE_ENV === 'production';
+
+  if (envPass) {
+    const salt = crypto.randomBytes(16).toString('hex');
+    const created: AdminAuthData = {
+      username,
+      salt,
+      hash: hashPassword(envPass, salt),
+      isConfigured: true,
+      updatedAt: new Date().toISOString(),
+    };
+    await dataStore.saveAdminAuth(created);
+    return created;
+  }
+
+  // In production without ADMIN_PASSWORD, require explicit one-time setup via /api/auth/setup-password (never allow a known default)
+  if (isProduction) {
+    const unconfigured: AdminAuthData = {
+      username,
+      salt: '',
+      hash: '',
+      isConfigured: false,
+      updatedAt: new Date().toISOString(),
+    };
+    await dataStore.saveAdminAuth(unconfigured);
+    return unconfigured;
+  }
+
+  // Local development convenience only
+  const salt = crypto.randomBytes(16).toString('hex');
   const created: AdminAuthData = {
-    username: process.env.ADMIN_USERNAME?.trim() || 'admin',
+    username,
     salt,
-    hash: hashPassword(initialPass, salt),
-    isConfigured: Boolean(envPass),
+    hash: hashPassword('baydoah1446', salt),
+    isConfigured: false,
     updatedAt: new Date().toISOString(),
   };
   await dataStore.saveAdminAuth(created);
@@ -117,11 +183,18 @@ app.get('/api/auth/status', async (_req, res) => {
 app.post('/api/auth/setup-password', async (req, res) => {
   try {
     const existing = await ensureAdminInitialized();
+    if (existing.isConfigured && existing.hash) {
+      return res.status(403).json({
+        success: false,
+        message: 'تم إعداد كلمة مرور الإدارة مسبقاً، يرجى تسجيل الدخول / Admin password is already configured',
+      });
+    }
+
     const { newPassword, confirmPassword } = req.body;
-    if (!newPassword || newPassword.length < 6) {
+    if (!newPassword || String(newPassword).length < 8) {
       return res.status(400).json({
         success: false,
-        message: 'يجب أن لا تقل كلمة المرور عن 6 أحرف / Password must be at least 6 characters',
+        message: 'يجب أن لا تقل كلمة المرور عن 8 أحرف / Password must be at least 8 characters',
       });
     }
     if (newPassword !== confirmPassword) {
@@ -159,13 +232,21 @@ app.post('/api/auth/setup-password', async (req, res) => {
 app.post('/api/auth/login', async (req, res) => {
   try {
     const adminAuth = await ensureAdminInitialized();
-    const clientIp = req.ip || req.socket.remoteAddress || 'unknown';
+    const clientIp = getClientIp(req);
     const rateLimit = checkRateLimit(clientIp);
 
     if (!rateLimit.allowed) {
       return res.status(429).json({
         success: false,
         message: `تم حظر المحاولات مؤقتاً بسبب تكرار الأخطاء. يرجى الانتظار ${rateLimit.remainingSeconds} ثانية / Too many failed attempts. Try again in ${rateLimit.remainingSeconds}s.`,
+      });
+    }
+
+    if (!adminAuth.hash || !adminAuth.salt) {
+      return res.status(403).json({
+        success: false,
+        requiresSetup: true,
+        message: 'يرجى إكمال إعداد كلمة مرور الإدارة أولاً / Please complete initial admin password setup first.',
       });
     }
 
@@ -219,6 +300,54 @@ app.get('/api/auth/verify', async (req, res) => {
   }
 });
 
+app.get('/api/auth/sessions', requireAdmin, async (req, res) => {
+  try {
+    const authHeader = req.headers.authorization;
+    const token = authHeader ? authHeader.replace('Bearer ', '').trim() : '';
+    const [sessions, adminAuth] = await Promise.all([
+      dataStore.listActiveSessions(token),
+      ensureAdminInitialized(),
+    ]);
+    res.json({
+      success: true,
+      data: {
+        sessions,
+        security: {
+          trustProxy: true,
+          rateLimitMaxAttempts: 5,
+          rateLimitLockMinutes: 5,
+          questionLimitPer15Min: QUESTION_MAX_PER_WINDOW,
+          isConfigured: Boolean(adminAuth.isConfigured),
+          updatedAt: adminAuth.updatedAt,
+          storageEngine: dataStore.getEngineInfo().engine,
+        },
+      },
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, message: 'Failed loading security sessions' });
+  }
+});
+
+app.post('/api/auth/revoke-other-sessions', requireAdmin, async (req, res) => {
+  try {
+    const authHeader = req.headers.authorization;
+    const token = authHeader ? authHeader.replace('Bearer ', '').trim() : '';
+    const revoked = await dataStore.revokeOtherSessions(token);
+    res.json({
+      success: true,
+      data: { revoked },
+      message:
+        revoked > 0
+          ? `تم إنهاء ${revoked} جلسة أخرى بنجاح`
+          : 'لا توجد جلسات أخرى نشطة',
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, message: 'Failed revoking sessions' });
+  }
+});
+
 app.post('/api/auth/change-password', requireAdmin, async (req, res) => {
   try {
     const adminAuth = await ensureAdminInitialized();
@@ -232,10 +361,10 @@ app.post('/api/auth/change-password', requireAdmin, async (req, res) => {
       });
     }
 
-    if (!newPassword || newPassword.length < 6) {
+    if (!newPassword || String(newPassword).length < 8) {
       return res.status(400).json({
         success: false,
-        message: 'يجب أن لا تقل كلمة المرور الجديدة عن 6 أحرف / New password must be at least 6 characters',
+        message: 'يجب أن لا تقل كلمة المرور الجديدة عن 8 أحرف / New password must be at least 8 characters',
       });
     }
 
@@ -248,9 +377,15 @@ app.post('/api/auth/change-password', requireAdmin, async (req, res) => {
       updatedAt: new Date().toISOString(),
     });
 
+    const authHeader = req.headers.authorization;
+    const currentToken = authHeader ? authHeader.replace('Bearer ', '').trim() : '';
+    if (currentToken) {
+      await dataStore.revokeOtherSessions(currentToken);
+    }
+
     return res.json({
       success: true,
-      message: 'تم تحديث كلمة المرور بنجاح / Password updated successfully',
+      message: 'تم تحديث كلمة المرور وإنهاء جميع الجلسات الأخرى بنجاح / Password updated & other sessions revoked',
     });
   } catch (err) {
     console.error(err);
@@ -474,6 +609,7 @@ app.post('/api/poetry', requireAdmin, async (req, res) => {
       category: req.body.category || 'الأدب والأخلاق',
       summary: req.body.summary || '',
       verses,
+      featured: Boolean(req.body.featured),
     });
     res.json({ success: true, data: newPoem });
   } catch (err) {
@@ -562,6 +698,56 @@ app.delete('/api/articles/:id', requireAdmin, async (req, res) => {
   }
 });
 
+app.post('/api/articles/:id/view', async (req, res) => {
+  try {
+    const id = String(req.params.id || '').trim();
+    if (!id) {
+      return res.status(400).json({ success: false, message: 'Missing article ID' });
+    }
+
+    const clientIp = getClientIp(req);
+    const dedupeKey = `${clientIp}:${id}`;
+    const now = Date.now();
+    const lastViewedAt = articleViewDedupe.get(dedupeKey) || 0;
+
+    if (now - lastViewedAt < ARTICLE_VIEW_WINDOW_MS) {
+      const existingList = await dataStore.getArticles();
+      const existing = existingList.find((a) => a.id === id);
+      if (!existing) {
+        return res.status(404).json({ success: false, message: 'المقال غير موجود' });
+      }
+      return res.json({
+        success: true,
+        incremented: false,
+        data: { id: existing.id, views: existing.views },
+      });
+    }
+
+    const updated = await dataStore.incrementArticleViews(id);
+    if (!updated) {
+      return res.status(404).json({ success: false, message: 'المقال غير موجود' });
+    }
+
+    if (articleViewDedupe.size > 5000) {
+      for (const [k, ts] of articleViewDedupe.entries()) {
+        if (now - ts >= ARTICLE_VIEW_WINDOW_MS) {
+          articleViewDedupe.delete(k);
+        }
+      }
+    }
+    articleViewDedupe.set(dedupeKey, now);
+
+    return res.json({
+      success: true,
+      incremented: true,
+      data: { id: updated.id, views: updated.views },
+    });
+  } catch (err) {
+    console.error('Failed incrementing article views:', err);
+    return res.status(500).json({ success: false, message: 'Failed recording article view' });
+  }
+});
+
 // ==================== SCHEDULE ====================
 
 app.get('/api/schedule', async (_req, res) => {
@@ -584,12 +770,21 @@ app.put('/api/schedule', requireAdmin, async (req, res) => {
   }
 });
 
-// ==================== STUDENT QUESTIONS ====================
+// ==================== STUDENT QUESTIONS (WITH MODERATION & SPAM GUARD) ====================
 
-app.get('/api/questions', async (_req, res) => {
+app.get('/api/questions', async (req, res) => {
   try {
+    const authHeader = req.headers.authorization;
+    const token = authHeader ? authHeader.replace('Bearer ', '').trim() : '';
+    const adminSession = token ? await dataStore.getSession(token) : null;
     const list = await dataStore.getQuestions();
-    res.json({ success: true, data: list });
+
+    // Public visitors only see answered & moderated questions; Admin sees all (pending + answered)
+    const visibleList = adminSession
+      ? list
+      : list.filter((q) => Boolean(q.answer && q.answer.trim().length > 0));
+
+    res.json({ success: true, data: visibleList });
   } catch (err) {
     console.error(err);
     res.status(500).json({ success: false, message: 'Failed loading questions' });
@@ -598,15 +793,56 @@ app.get('/api/questions', async (_req, res) => {
 
 app.post('/api/questions', async (req, res) => {
   try {
+    // 1. Silent honeypot trap for automated bots
+    const trap = String(req.body?.website || req.body?.honeypot || '').trim();
+    if (trap.length > 0) {
+      return res.json({ success: true, pendingModeration: true });
+    }
+
+    // 2. Per-IP submission rate limit (proxy-aware)
+    const clientIp = getClientIp(req);
+    const rateCheck = checkQuestionRateLimit(clientIp);
+    if (!rateCheck.allowed) {
+      return res.status(429).json({
+        success: false,
+        message: `تم إرسال عدة أسئلة من نفس العنوان مؤخراً. يرجى الانتظار ${rateCheck.remainingMinutes} دقيقة قبل إرسال سؤال جديد / Too many submissions. Please try again in ${rateCheck.remainingMinutes} min.`,
+      });
+    }
+
+    // 3. Content validation & spam link guard
+    const rawQuestion = String(req.body?.question || '').trim();
+    const rawStudentName = String(req.body?.studentName || '').trim().slice(0, 80);
+    const rawCategory = String(req.body?.category || 'سؤال عام').trim().slice(0, 80);
+
+    if (rawQuestion.length < 8) {
+      return res.status(400).json({
+        success: false,
+        message: 'يرجى كتابة نص السؤال بوضوح (8 أحرف على الأقل) / Question must be at least 8 characters.',
+      });
+    }
+    if (rawQuestion.length > 2500) {
+      return res.status(400).json({
+        success: false,
+        message: 'نص السؤال طويل جداً (الحد الأقصى 2500 حرف) / Question cannot exceed 2500 characters.',
+      });
+    }
+    const urlMatches = rawQuestion.match(/https?:\/\//gi) || [];
+    if (urlMatches.length > 2) {
+      return res.status(400).json({
+        success: false,
+        message: 'لا يُسمح بإدراج روابط متعددة في نص السؤال / Multiple URLs are not allowed in questions.',
+      });
+    }
+
     const newQuestion = await dataStore.createQuestion({
       id: 'q-' + Date.now(),
-      studentName: req.body.studentName || 'طالب علم',
-      question: req.body.question || '',
-      answer: req.body.answer || null,
+      studentName: rawStudentName || 'طالب علم',
+      question: rawQuestion,
+      answer: null,
       date: new Date().toLocaleDateString('ar-SA'),
-      category: req.body.category || 'سؤال عام',
+      category: rawCategory || 'سؤال عام',
     });
-    res.json({ success: true, data: newQuestion });
+    res.json({ success: true, data: newQuestion, pendingModeration: true });
   } catch (err) {
     console.error(err);
     res.status(500).json({ success: false, message: 'Failed submitting question' });
@@ -636,6 +872,49 @@ app.delete('/api/questions/:id', requireAdmin, async (req, res) => {
     res.status(500).json({ success: false, message: 'Failed deleting question' });
   }
 });
+
+// ==================== DIRECT R2 UPLOAD FOR ADMIN MODALS ====================
+
+app.post(
+  '/api/r2/upload',
+  requireAdmin,
+  express.raw({ type: '*/*', limit: '210mb' }),
+  async (req, res) => {
+    req.setTimeout(10 * 60 * 1000);
+    try {
+      const kindRaw = String(req.query.kind || 'audio');
+      const kind =
+        kindRaw === 'book' || kindRaw === 'matn' || kindRaw === 'audio'
+          ? kindRaw
+          : 'audio';
+      const rawFilename = String(
+        req.query.filename || req.headers['x-file-name'] || `upload-${Date.now()}.bin`
+      );
+      let decodedFilename = rawFilename;
+      try {
+        decodedFilename = decodeURIComponent(rawFilename);
+      } catch {
+        // Use rawFilename as-is if not URI-encoded
+      }
+      const prefix = String(req.query.prefix || 'general');
+      const bodyBuffer = Buffer.isBuffer(req.body) ? req.body : Buffer.from([]);
+      const uploaded = await uploadFileToR2({
+        buffer: bodyBuffer,
+        originalFilename: decodedFilename,
+        contentType: String(req.headers['content-type'] || 'application/octet-stream'),
+        kind,
+        prefix,
+      });
+
+      res.json({ success: true, data: uploaded });
+    } catch (err) {
+      res.status(400).json({
+        success: false,
+        message: (err as Error).message || 'R2 upload failed',
+      });
+    }
+  }
+);
 
 // ==================== BULK IMPORT, CLOUDFLARE R2 SYNC & TELEGRAM ====================
 
@@ -782,7 +1061,8 @@ app.get('/api/bulk/export', requireAdmin, async (_req, res) => {
 
 app.post('/api/admin/batch', requireAdmin, async (req, res) => {
   try {
-    const { entity, action, ids, patch } = req.body || {};
+    const { entity: rawEntity, action, ids, patch } = req.body || {};
+    const entity = rawEntity === 'poetry' ? 'poems' : rawEntity;
     if (!['books', 'audios', 'poems', 'articles', 'questions'].includes(entity)) {
       return res.status(400).json({ success: false, message: 'Invalid entity type' });
     }
