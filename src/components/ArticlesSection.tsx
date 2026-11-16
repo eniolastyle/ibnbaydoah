@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Article } from '../types';
 import { useLanguage } from '../context/LanguageContext';
 import { Pagination } from './Pagination';
+import { getShareableUrl, copyShareUrl } from '../utils/routing';
 import {
   FileText,
   Search,
@@ -9,25 +10,64 @@ import {
   Copy,
   Check,
   BookOpen,
-  ArrowRight
+  ArrowRight,
+  Share2
 } from 'lucide-react';
 
 interface ArticlesSectionProps {
   articles: Article[];
+  initialArticleId?: string | null;
+  onSelectArticle?: (articleId: string | null) => void;
 }
 
-export const ArticlesSection: React.FC<ArticlesSectionProps> = ({ articles }) => {
+export const ArticlesSection: React.FC<ArticlesSectionProps> = ({
+  articles,
+  initialArticleId = null,
+  onSelectArticle
+}) => {
   const { lang, t, translateCategory, translateArticleType } = useLanguage();
   const [selectedType, setSelectedType] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [readingArticle, setReadingArticle] = useState<Article | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [copiedLinkId, setCopiedLinkId] = useState<string | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
   const PAGE_SIZE = 4;
 
   useEffect(() => {
     setCurrentPage(1);
   }, [selectedType, searchQuery, articles.length]);
+
+  useEffect(() => {
+    if (!initialArticleId) {
+      setReadingArticle(null);
+      return;
+    }
+    const found = articles.find(a => a.id === initialArticleId);
+    if (found) {
+      setReadingArticle(found);
+    }
+  }, [initialArticleId, articles]);
+
+  const handleOpenArticle = (art: Article) => {
+    setReadingArticle(art);
+    onSelectArticle?.(art.id);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  const handleCloseArticle = () => {
+    setReadingArticle(null);
+    onSelectArticle?.(null);
+  };
+
+  const handleShareArticle = async (art: Article, e?: React.MouseEvent) => {
+    e?.stopPropagation();
+    const ok = await copyShareUrl(getShareableUrl({ tab: 'articles', itemId: art.id }));
+    if (ok) {
+      setCopiedLinkId(art.id);
+      setTimeout(() => setCopiedLinkId(prev => (prev === art.id ? null : prev)), 2200);
+    }
+  };
 
   const filteredArticles = articles.filter(art => {
     const matchesType = selectedType === 'all' || art.type === selectedType;
@@ -77,13 +117,33 @@ export const ArticlesSection: React.FC<ArticlesSectionProps> = ({ articles }) =>
       {/* Full Reading View if an article is open */}
       {readingArticle ? (
         <div className="bg-white rounded-3xl border border-[#E8DCC9] shadow-xl p-8 sm:p-12 space-y-8">
-          <button
-            onClick={() => setReadingArticle(null)}
-            className="inline-flex items-center gap-2 text-xs font-readex font-bold text-[#0F382C] hover:text-[#164E3D] px-3 py-1.5 rounded-lg bg-[#F4EFE6]"
-          >
-            <ArrowRight className="w-4 h-4 rtl:rotate-0 ltr:rotate-180" />
-            <span>{t('back_to_articles')}</span>
-          </button>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <button
+              onClick={handleCloseArticle}
+              className="inline-flex items-center gap-2 text-xs font-readex font-bold text-[#0F382C] hover:text-[#164E3D] px-3 py-1.5 rounded-lg bg-[#F4EFE6]"
+            >
+              <ArrowRight className="w-4 h-4 rtl:rotate-0 ltr:rotate-180" />
+              <span>{t('back_to_articles')}</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => handleShareArticle(readingArticle)}
+              className="inline-flex items-center gap-1.5 text-xs font-readex font-semibold text-[#0F382C] hover:bg-[#F4EFE6] px-3 py-1.5 rounded-lg border border-[#E0D4C1] transition"
+            >
+              {copiedLinkId === readingArticle.id ? (
+                <>
+                  <Check className="w-3.5 h-3.5 text-emerald-600" />
+                  <span className="text-emerald-700">{t('link_copied')}</span>
+                </>
+              ) : (
+                <>
+                  <Share2 className="w-3.5 h-3.5 text-[#A58455]" />
+                  <span>{t('share_article')}</span>
+                </>
+              )}
+            </button>
+          </div>
 
           {/* Article Header */}
           <div className="border-b border-[#C5A880]/30 pb-6">
@@ -247,7 +307,7 @@ export const ArticlesSection: React.FC<ArticlesSectionProps> = ({ articles }) =>
 
                     {/* Title */}
                     <h3
-                      onClick={() => setReadingArticle(art)}
+                      onClick={() => handleOpenArticle(art)}
                       className="font-amiri font-bold text-2xl text-[#0F382C] mb-2 group-hover:text-[#164E3D] cursor-pointer transition"
                     >
                       {art.title}
@@ -274,24 +334,40 @@ export const ArticlesSection: React.FC<ArticlesSectionProps> = ({ articles }) =>
                   {/* Actions footer */}
                   <div className="pt-4 border-t border-[#C5A880]/20 flex items-center justify-between text-xs font-readex">
                     <button
-                      onClick={() => setReadingArticle(art)}
+                      onClick={() => handleOpenArticle(art)}
                       className="text-[#0F382C] hover:underline font-bold flex items-center gap-1"
                     >
                       <BookOpen className="w-3.5 h-3.5" />
                       <span>{t('read_full')}</span>
                     </button>
 
-                    <button
-                      onClick={() => handleCopyContent(art)}
-                      className="p-1.5 rounded-lg text-[#A58455] hover:bg-[#F4EFE6] hover:text-[#0F382C] transition"
-                      title={t('copy_full_article')}
-                    >
-                      {copiedId === art.id ? (
-                        <Check className="w-4 h-4 text-emerald-600" />
-                      ) : (
-                        <Copy className="w-4 h-4" />
-                      )}
-                    </button>
+                    <div className="flex items-center gap-1">
+                      <button
+                        type="button"
+                        onClick={(e) => handleShareArticle(art, e)}
+                        className="p-1.5 rounded-lg text-[#A58455] hover:bg-[#F4EFE6] hover:text-[#0F382C] transition"
+                        title={t('share_article')}
+                        aria-label={t('share_article')}
+                      >
+                        {copiedLinkId === art.id ? (
+                          <Check className="w-4 h-4 text-emerald-600" />
+                        ) : (
+                          <Share2 className="w-4 h-4" />
+                        )}
+                      </button>
+
+                      <button
+                        onClick={() => handleCopyContent(art)}
+                        className="p-1.5 rounded-lg text-[#A58455] hover:bg-[#F4EFE6] hover:text-[#0F382C] transition"
+                        title={t('copy_full_article')}
+                      >
+                        {copiedId === art.id ? (
+                          <Check className="w-4 h-4 text-emerald-600" />
+                        ) : (
+                          <Copy className="w-4 h-4" />
+                        )}
+                      </button>
+                    </div>
                   </div>
                 </div>
               );

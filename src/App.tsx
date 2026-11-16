@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { LanguageProvider, useLanguage } from './context/LanguageContext';
 import { AudioProvider, useAudio } from './context/AudioContext';
 import { Navbar } from './components/Navbar';
@@ -13,6 +13,17 @@ import { AdminDashboard } from './components/AdminDashboard';
 import { AudioPlayerDock } from './components/AudioPlayerDock';
 import { SearchModal } from './components/SearchModal';
 import { Footer } from './components/Footer';
+import {
+  AppRoute,
+  AppTab,
+  parseRoute,
+  buildPath,
+  getCanonicalUrl,
+  getShareableUrl,
+  copyShareUrl,
+  isValidTab
+} from './utils/routing';
+import { ArrowRight, ChevronLeft, Home, Share2, Check } from 'lucide-react';
 import {
   Profile,
   Book,
@@ -56,8 +67,15 @@ const initialCategories = [
 function MainContent() {
   const { lang, t, translateCategory, translateStatus, translateMeter, translateArticleType } = useLanguage();
   const { currentTrack } = useAudio();
-  const [activeTab, setActiveTab] = useState<string>('home');
+  const [route, setRoute] = useState<AppRoute>(() =>
+    typeof window !== 'undefined' ? parseRoute(window.location.pathname) : { tab: 'home', itemId: null }
+  );
   const [isSearchOpen, setIsSearchOpen] = useState(false);
+  const [isLoadingPoems, setIsLoadingPoems] = useState(true);
+  const [pageLinkCopied, setPageLinkCopied] = useState(false);
+
+  const activeTab = route.tab;
+  const activeItemId = route.itemId ?? null;
 
   // Data states
   const [profile, setProfile] = useState<Profile>(initialProfile);
@@ -123,6 +141,8 @@ function MainContent() {
       if (statsRes?.data) setStats(statsRes.data);
     } catch (err) {
       console.warn('API fetch warning, using loaded memory data:', err);
+    } finally {
+      setIsLoadingPoems(false);
     }
   };
 
@@ -130,13 +150,159 @@ function MainContent() {
     loadAllData();
   }, []);
 
-  const handleNavigate = (tab: string) => {
-    setActiveTab(tab);
-    window.scrollTo({ top: 0, behavior: 'smooth' });
+  // Sync browser Back / Forward buttons with app route
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    if (!window.history.state || typeof window.history.state.appNavDepth !== 'number') {
+      const initial = parseRoute(window.location.pathname);
+      window.history.replaceState({ ...initial, appNavDepth: 0 }, '', buildPath(initial));
+    }
+
+    const handlePopState = () => {
+      const parsed = parseRoute(window.location.pathname);
+      setRoute(parsed);
+      setPageLinkCopied(false);
+    };
+
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, []);
+
+  const navigateTo = useCallback(
+    (
+      nextTab: AppTab | string,
+      nextItemId: string | null = null,
+      options?: { preserveScroll?: boolean; replace?: boolean }
+    ) => {
+      const tab: AppTab = isValidTab(nextTab) ? nextTab : 'home';
+      const itemId = nextItemId || null;
+      const nextRoute: AppRoute = { tab, itemId };
+      const targetPath = buildPath(nextRoute);
+
+      if (typeof window !== 'undefined' && window.location.pathname !== targetPath) {
+        const currentDepth =
+          typeof window.history.state?.appNavDepth === 'number' ? window.history.state.appNavDepth : 0;
+        if (options?.replace) {
+          window.history.replaceState({ ...nextRoute, appNavDepth: currentDepth }, '', targetPath);
+        } else {
+          window.history.pushState({ ...nextRoute, appNavDepth: currentDepth + 1 }, '', targetPath);
+        }
+      }
+
+      setRoute(nextRoute);
+      setPageLinkCopied(false);
+      if (!options?.preserveScroll) {
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+      }
+    },
+    []
+  );
+
+  const handleNavigate = useCallback(
+    (tab: string) => {
+      navigateTo(tab, null);
+    },
+    [navigateTo]
+  );
+
+  const handleBack = useCallback(() => {
+    if (typeof window !== 'undefined') {
+      const depth =
+        typeof window.history.state?.appNavDepth === 'number' ? window.history.state.appNavDepth : 0;
+      if (depth > 0) {
+        window.history.back();
+        return;
+      }
+    }
+    // Fallback when visitor landed directly on a shared URL
+    if (activeItemId) {
+      navigateTo(activeTab, null);
+    } else if (activeTab !== 'home') {
+      navigateTo('home', null);
+    }
+  }, [activeItemId, activeTab, navigateTo]);
+
+  // Resolve current item title (for breadcrumbs, page <title>, and canonical SEO)
+  const activeItemTitle = useMemo(() => {
+    if (!activeItemId) return null;
+    switch (activeTab) {
+      case 'library':
+        return books.find(b => b.id === activeItemId)?.title || null;
+      case 'audios':
+        return audios.find(a => a.id === activeItemId)?.title || null;
+      case 'poetry':
+        return poems.find(p => p.id === activeItemId)?.title || null;
+      case 'articles':
+        return articles.find(a => a.id === activeItemId)?.title || null;
+      default:
+        return null;
+    }
+  }, [activeItemId, activeTab, books, audios, poems, articles]);
+
+  // Keep document title, canonical URL, and OpenGraph URL synchronized with active path
+  useEffect(() => {
+    if (typeof document === 'undefined') return;
+    const baseTitle =
+      lang === 'ar'
+        ? 'منصة أبي سعيد ابن بيضاء العلمية'
+        : 'Abu Sa\'eed Ibn Baydoah Platform';
+    const sectionTitles: Record<AppTab, string> = {
+      home: lang === 'ar' ? 'منصة أبي سعيد ابن بيضاء العلمية | Ibn Baydoah Platform' : 'Ibn Baydoah Platform | Classical Islamic & Linguistic Studies',
+      library: t('library'),
+      audios: t('audios'),
+      poetry: t('poetry'),
+      articles: t('articles'),
+      schedule: t('schedule'),
+      contact: t('contact'),
+      admin: t('admin'),
+    };
+
+    const computedTitle =
+      activeTab === 'home'
+        ? sectionTitles.home
+        : activeItemTitle
+        ? `${activeItemTitle} | ${sectionTitles[activeTab]} | ${baseTitle}`
+        : `${sectionTitles[activeTab]} | ${baseTitle}`;
+
+    document.title = computedTitle;
+
+    const canonicalUrl = getCanonicalUrl(route);
+    const canonicalLink = document.querySelector('link[rel="canonical"]');
+    if (canonicalLink) {
+      canonicalLink.setAttribute('href', canonicalUrl);
+    }
+    const ogUrl = document.querySelector('meta[property="og:url"]');
+    if (ogUrl) {
+      ogUrl.setAttribute('content', canonicalUrl);
+    }
+    const ogTitle = document.querySelector('meta[property="og:title"]');
+    if (ogTitle) {
+      ogTitle.setAttribute('content', computedTitle);
+    }
+  }, [route, activeTab, activeItemTitle, lang, t]);
+
+  const handleShareCurrentPage = async () => {
+    const url = getShareableUrl(route);
+    const ok = await copyShareUrl(url);
+    if (ok) {
+      setPageLinkCopied(true);
+      setTimeout(() => setPageLinkCopied(false), 2200);
+    }
   };
 
   const handleQuestionSubmitted = (newQ: StudentQuestion) => {
     setQuestions(prev => [newQ, ...prev]);
+  };
+
+  const sectionLabelMap: Record<AppTab, string> = {
+    home: t('home'),
+    library: t('library'),
+    audios: t('audios'),
+    poetry: t('poetry'),
+    articles: t('articles'),
+    schedule: t('schedule'),
+    contact: t('contact'),
+    admin: t('admin'),
   };
 
   return (
@@ -144,18 +310,94 @@ function MainContent() {
       {/* Universal Top Navigation */}
       <Navbar
         activeTab={activeTab}
-        setActiveTab={setActiveTab}
+        setActiveTab={handleNavigate}
         onOpenSearch={() => setIsSearchOpen(true)}
         duaHeader={profile.dua_header}
       />
 
       {/* Main Body Pages View */}
       <main className="flex-1 pb-32 sm:pb-36 lg:pb-24">
+        {activeTab !== 'home' && (
+          <div className="bg-[#FAF6EE]/90 border-b border-[#E8DCC9]">
+            <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-3 flex flex-wrap items-center justify-between gap-3">
+              <div className="flex flex-wrap items-center gap-2 sm:gap-3 min-w-0">
+                <button
+                  type="button"
+                  onClick={handleBack}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white border border-[#E0D4C1] hover:border-[#0F382C]/40 hover:bg-[#F4EFE6] text-[#0F382C] text-xs font-readex font-bold shadow-2xs transition shrink-0"
+                >
+                  <ArrowRight className="w-3.5 h-3.5 rtl:rotate-0 ltr:rotate-180 text-[#A58455]" />
+                  <span>{t('back_btn')}</span>
+                </button>
+
+                <nav
+                  aria-label="Breadcrumb"
+                  className="flex items-center gap-1.5 text-xs font-readex text-[#7A6440] min-w-0 flex-wrap"
+                >
+                  <button
+                    type="button"
+                    onClick={() => navigateTo('home', null)}
+                    className="inline-flex items-center gap-1 hover:text-[#0F382C] font-medium transition"
+                  >
+                    <Home className="w-3.5 h-3.5 text-[#A58455]" />
+                    <span>{t('home')}</span>
+                  </button>
+
+                  <ChevronLeft className="w-3.5 h-3.5 text-[#C5A880] ltr:rotate-180 shrink-0" />
+
+                  <button
+                    type="button"
+                    onClick={() => navigateTo(activeTab, null)}
+                    className={`truncate transition ${
+                      activeItemTitle
+                        ? 'hover:text-[#0F382C] font-medium'
+                        : 'text-[#0F382C] font-bold'
+                    }`}
+                  >
+                    {sectionLabelMap[activeTab]}
+                  </button>
+
+                  {activeItemTitle && (
+                    <>
+                      <ChevronLeft className="w-3.5 h-3.5 text-[#C5A880] ltr:rotate-180 shrink-0" />
+                      <span className="text-[#0F382C] font-bold truncate max-w-[200px] sm:max-w-xs">
+                        {activeItemTitle}
+                      </span>
+                    </>
+                  )}
+                </nav>
+              </div>
+
+              <button
+                type="button"
+                onClick={handleShareCurrentPage}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white border border-[#E0D4C1] hover:border-[#0F382C]/40 hover:bg-[#F4EFE6] text-[#0F382C] text-xs font-readex font-semibold shadow-2xs transition shrink-0"
+                title={getShareableUrl(route)}
+              >
+                {pageLinkCopied ? (
+                  <>
+                    <Check className="w-3.5 h-3.5 text-emerald-600" />
+                    <span className="text-emerald-700">{t('link_copied')}</span>
+                  </>
+                ) : (
+                  <>
+                    <Share2 className="w-3.5 h-3.5 text-[#A58455]" />
+                    <span>{t('share_page')}</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        )}
+
         {activeTab === 'home' && (
           <div className="space-y-20 sm:space-y-28 lg:space-y-36">
             <Hero
               profile={profile}
               onNavigate={handleNavigate}
+              onOpenPoem={(poemId) => navigateTo('poetry', poemId)}
+              poems={poems}
+              isLoadingPoems={isLoadingPoems}
               stats={stats}
             />
 
@@ -183,7 +425,7 @@ function MainContent() {
                   {(books.some(b => b.featured) ? books.filter(b => b.featured) : books).slice(0, 3).map(book => (
                     <div
                       key={book.id}
-                      onClick={() => handleNavigate('library')}
+                      onClick={() => navigateTo('library', book.id)}
                       className="p-7 sm:p-8 rounded-3xl bg-white border border-[#E8DCC9] hover:border-[#0F382C]/40 shadow-[0_2px_12px_-2px_rgba(15,56,44,0.04)] hover:shadow-lg transition-all duration-300 cursor-pointer flex flex-col justify-between group"
                     >
                       <div>
@@ -269,7 +511,7 @@ function MainContent() {
 
                   {poems[0] && (
                     <div
-                      onClick={() => handleNavigate('poetry')}
+                      onClick={() => navigateTo('poetry', poems[0].id)}
                       className="p-5 rounded-2xl bg-[#FAF6EE] border border-[#E8DCC9] cursor-pointer hover:border-[#0F382C]/50 transition"
                     >
                       <div className="flex items-center justify-between text-xs font-readex text-[#8C6D3B] mb-2 font-medium">
@@ -289,7 +531,7 @@ function MainContent() {
 
                   {poems[1] && (
                     <div
-                      onClick={() => handleNavigate('poetry')}
+                      onClick={() => navigateTo('poetry', poems[1].id)}
                       className="p-5 rounded-2xl bg-[#FAF6EE] border border-[#E8DCC9] cursor-pointer hover:border-[#0F382C]/50 transition"
                     >
                       <div className="flex items-center justify-between text-xs font-readex text-[#8C6D3B] mb-2 font-medium">
@@ -331,7 +573,7 @@ function MainContent() {
                     {articles.slice(0, 2).map(art => (
                       <div
                         key={art.id}
-                        onClick={() => handleNavigate('articles')}
+                        onClick={() => navigateTo('articles', art.id)}
                         className="p-5 rounded-2xl bg-[#FAF6EE] border border-[#E8DCC9] hover:border-[#0F382C]/50 transition cursor-pointer"
                       >
                         <div className="flex items-center justify-between text-xs font-readex text-[#8C6D3B] mb-2 font-medium">
@@ -360,6 +602,8 @@ function MainContent() {
               books={books}
               categories={categories}
               whatsappNumber={profile.whatsapp}
+              initialBookId={activeItemId}
+              onSelectBook={(bookId) => navigateTo('library', bookId, { preserveScroll: true })}
             />
           </div>
         )}
@@ -370,6 +614,8 @@ function MainContent() {
             <AudioLecturesHub
               audios={audios}
               categories={categories}
+              initialCourseId={activeItemId}
+              onSelectCourse={(courseId) => navigateTo('audios', courseId, { preserveScroll: true })}
             />
           </div>
         )}
@@ -377,14 +623,23 @@ function MainContent() {
         {/* Poetry Diwan Tab */}
         {activeTab === 'poetry' && (
           <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-10 sm:py-16">
-            <PoetryDiwan poems={poems} />
+            <PoetryDiwan
+              poems={poems}
+              initialPoemId={activeItemId}
+              onSelectPoem={(poemId) => navigateTo('poetry', poemId)}
+              onClearInitialPoem={() => navigateTo('poetry', null)}
+            />
           </div>
         )}
 
         {/* Articles & Khawatir Tab */}
         {activeTab === 'articles' && (
           <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-10 sm:py-16">
-            <ArticlesSection articles={articles} />
+            <ArticlesSection
+              articles={articles}
+              initialArticleId={activeItemId}
+              onSelectArticle={(articleId) => navigateTo('articles', articleId)}
+            />
           </div>
         )}
 
@@ -440,7 +695,7 @@ function MainContent() {
         audios={audios}
         poems={poems}
         articles={articles}
-        onSelectResult={(tab) => handleNavigate(tab)}
+        onSelectResult={(tab, id) => navigateTo(tab, id ?? null)}
       />
 
       {/* Persistent Audio Dock at screen bottom */}

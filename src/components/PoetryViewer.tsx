@@ -2,13 +2,15 @@ import React, { useState, useEffect } from 'react';
 import { Poem, PoemVerse } from '../types';
 import { useLanguage } from '../context/LanguageContext';
 import { Pagination } from './Pagination';
+import { getShareableUrl, copyShareUrl } from '../utils/routing';
 import {
   Copy,
   Check,
   Search,
   Feather,
   Sliders,
-  ArrowRight
+  ArrowRight,
+  Share2
 } from 'lucide-react';
 
 interface PoetryViewerProps {
@@ -20,6 +22,7 @@ export const PoetryViewer: React.FC<PoetryViewerProps> = ({ poem, onBack }) => {
   const { t, translateMeter, translateCategory } = useLanguage();
   const [fontSize, setFontSize] = useState<'normal' | 'large' | 'xlarge'>('large');
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
+  const [linkCopied, setLinkCopied] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [focusedVerse, setFocusedVerse] = useState<number | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
@@ -68,15 +71,41 @@ export const PoetryViewer: React.FC<PoetryViewerProps> = ({ poem, onBack }) => {
         <div className="absolute inset-0 bg-arabesque-dark opacity-30 pointer-events-none" />
 
         <div className="relative z-10">
-          {onBack && (
+          <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+            {onBack ? (
+              <button
+                onClick={onBack}
+                className="inline-flex items-center gap-2 text-[#DFC7A5] hover:text-white transition font-readex text-sm font-semibold"
+              >
+                <ArrowRight className="w-4 h-4 rtl:rotate-0 ltr:rotate-180" />
+                <span>{t('back_to_poetry')}</span>
+              </button>
+            ) : <span />}
+
             <button
-              onClick={onBack}
-              className="inline-flex items-center gap-2 mb-4 text-[#DFC7A5] hover:text-white transition font-readex text-sm font-semibold"
+              type="button"
+              onClick={async () => {
+                const ok = await copyShareUrl(getShareableUrl({ tab: 'poetry', itemId: poem.id }));
+                if (ok) {
+                  setLinkCopied(true);
+                  setTimeout(() => setLinkCopied(false), 2200);
+                }
+              }}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white/10 hover:bg-white/20 border border-[#C5A880]/40 text-[#DFC7A5] hover:text-white transition font-readex text-xs font-semibold"
             >
-              <ArrowRight className="w-4 h-4 rtl:rotate-0 ltr:rotate-180" />
-              <span>{t('back_to_poetry')}</span>
+              {linkCopied ? (
+                <>
+                  <Check className="w-3.5 h-3.5 text-emerald-300" />
+                  <span className="text-emerald-200">{t('link_copied')}</span>
+                </>
+              ) : (
+                <>
+                  <Share2 className="w-3.5 h-3.5" />
+                  <span>{t('share_poem')}</span>
+                </>
+              )}
             </button>
-          )}
+          </div>
 
           <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
             <div>

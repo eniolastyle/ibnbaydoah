@@ -3,28 +3,65 @@ import { Poem } from '../types';
 import { PoetryViewer } from './PoetryViewer';
 import { useLanguage } from '../context/LanguageContext';
 import { Pagination } from './Pagination';
+import { getShareableUrl, copyShareUrl } from '../utils/routing';
 import {
   Feather,
   Search,
   Layers,
   ChevronLeft,
-  ChevronRight
+  ChevronRight,
+  Share2,
+  Check
 } from 'lucide-react';
 
 interface PoetryDiwanProps {
   poems: Poem[];
+  initialPoemId?: string | null;
+  onSelectPoem?: (poemId: string | null) => void;
+  onClearInitialPoem?: () => void;
 }
 
-export const PoetryDiwan: React.FC<PoetryDiwanProps> = ({ poems }) => {
+export const PoetryDiwan: React.FC<PoetryDiwanProps> = ({
+  poems,
+  initialPoemId = null,
+  onSelectPoem,
+  onClearInitialPoem
+}) => {
   const { lang, dir, t, translateMeter, translateCategory } = useLanguage();
-  const [selectedPoemId, setSelectedPoemId] = useState<string | null>(null);
+  const [selectedPoemId, setSelectedPoemId] = useState<string | null>(initialPoemId);
+  const [copiedPoemId, setCopiedPoemId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
   const PAGE_SIZE = 4;
 
   useEffect(() => {
+    setSelectedPoemId(initialPoemId ?? null);
+  }, [initialPoemId]);
+
+  useEffect(() => {
     setCurrentPage(1);
   }, [searchQuery, poems.length]);
+
+  const handleOpenPoem = (id: string) => {
+    setSelectedPoemId(id);
+    onSelectPoem?.(id);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  const handleClosePoem = () => {
+    setSelectedPoemId(null);
+    onClearInitialPoem?.();
+    onSelectPoem?.(null);
+  };
+
+  const handleSharePoem = async (poemId: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    const ok = await copyShareUrl(getShareableUrl({ tab: 'poetry', itemId: poemId }));
+    if (ok) {
+      setCopiedPoemId(poemId);
+      setTimeout(() => setCopiedPoemId(prev => (prev === poemId ? null : prev)), 2200);
+    }
+  };
 
   const filteredPoems = poems.filter(p => {
     if (!searchQuery.trim()) return true;
@@ -53,7 +90,7 @@ export const PoetryDiwan: React.FC<PoetryDiwanProps> = ({ poems }) => {
     return (
       <PoetryViewer
         poem={selectedPoem}
-        onBack={() => setSelectedPoemId(null)}
+        onBack={handleClosePoem}
       />
     );
   }
@@ -109,7 +146,7 @@ export const PoetryDiwan: React.FC<PoetryDiwanProps> = ({ poems }) => {
           return (
             <div
               key={poem.id}
-              onClick={() => setSelectedPoemId(poem.id)}
+              onClick={() => handleOpenPoem(poem.id)}
               className="bg-white rounded-3xl border border-[#E8DCC9] shadow-[0_2px_12px_-2px_rgba(15,56,44,0.04)] hover:shadow-lg hover:border-[#0F382C]/40 transition-all duration-300 p-7 sm:p-8 flex flex-col justify-between cursor-pointer group"
             >
               <div>
@@ -118,9 +155,22 @@ export const PoetryDiwan: React.FC<PoetryDiwanProps> = ({ poems }) => {
                   <span className="text-xs font-readex font-medium px-3 py-1 rounded-full bg-[#0F382C]/10 text-[#0F382C] border border-[#E0D4C1]">
                     {translateMeter(poem.meter)}
                   </span>
-                  <div className="flex items-center gap-1.5 text-xs text-[#8C6D3B] font-readex font-semibold">
+                  <div className="flex items-center gap-2 text-xs text-[#8C6D3B] font-readex font-semibold">
                     <Layers className="w-3.5 h-3.5" />
                     <span>{poem.totalVerses} {t('verses_count')}</span>
+                    <button
+                      type="button"
+                      onClick={(e) => handleSharePoem(poem.id, e)}
+                      className="p-1.5 rounded-lg text-[#8C6D3B] hover:text-[#0F382C] hover:bg-[#FAF6EE] border border-transparent hover:border-[#E0D4C1] transition"
+                      title={t('share_poem')}
+                      aria-label={t('share_poem')}
+                    >
+                      {copiedPoemId === poem.id ? (
+                        <Check className="w-3.5 h-3.5 text-emerald-600" />
+                      ) : (
+                        <Share2 className="w-3.5 h-3.5" />
+                      )}
+                    </button>
                   </div>
                 </div>
 

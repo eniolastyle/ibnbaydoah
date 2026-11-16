@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Book } from '../types';
 import { useLanguage } from '../context/LanguageContext';
 import { Pagination } from './Pagination';
+import { getShareableUrl, copyShareUrl } from '../utils/routing';
 import {
   BookOpen,
   Search,
@@ -12,19 +13,25 @@ import {
   Layers,
   Sparkles,
   Info,
-  ShoppingBag
+  ShoppingBag,
+  Share2,
+  Check
 } from 'lucide-react';
 
 interface LibraryExplorerProps {
   books: Book[];
   categories: string[];
   whatsappNumber: string;
+  initialBookId?: string | null;
+  onSelectBook?: (bookId: string | null) => void;
 }
 
 export const LibraryExplorer: React.FC<LibraryExplorerProps> = ({
   books,
   categories,
-  whatsappNumber
+  whatsappNumber,
+  initialBookId = null,
+  onSelectBook
 }) => {
   const { lang, t, translateCategory, translateStatus } = useLanguage();
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
@@ -33,12 +40,44 @@ export const LibraryExplorer: React.FC<LibraryExplorerProps> = ({
   const [searchQuery, setSearchQuery] = useState('');
   const [activeBook, setActiveBook] = useState<Book | null>(null);
   const [pdfNotice, setPdfNotice] = useState<string | null>(null);
+  const [copiedBookId, setCopiedBookId] = useState<string | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
   const PAGE_SIZE = 6;
 
   useEffect(() => {
     setCurrentPage(1);
   }, [selectedCategory, statusFilter, pricingFilter, searchQuery, books.length]);
+
+  useEffect(() => {
+    if (!initialBookId) {
+      setActiveBook(null);
+      return;
+    }
+    const found = books.find(b => b.id === initialBookId);
+    if (found) {
+      setActiveBook(found);
+    }
+  }, [initialBookId, books]);
+
+  const handleOpenBook = (book: Book) => {
+    setActiveBook(book);
+    onSelectBook?.(book.id);
+  };
+
+  const handleCloseBook = () => {
+    setActiveBook(null);
+    onSelectBook?.(null);
+  };
+
+  const handleShareBook = async (book: Book, e?: React.MouseEvent) => {
+    e?.stopPropagation();
+    const url = getShareableUrl({ tab: 'library', itemId: book.id });
+    const copied = await copyShareUrl(url);
+    if (copied) {
+      setCopiedBookId(book.id);
+      setTimeout(() => setCopiedBookId(prev => (prev === book.id ? null : prev)), 2200);
+    }
+  };
 
   const filteredBooks = books.filter(book => {
     const matchesCategory =
@@ -366,13 +405,28 @@ export const LibraryExplorer: React.FC<LibraryExplorerProps> = ({
                 </div>
 
                 {/* Card Actions Bottom */}
-                <div className="p-4 sm:p-5 bg-[#FAF6EE] border-t border-[#E8DCC9] flex items-center justify-between gap-3">
-                  <button
-                    onClick={() => setActiveBook(book)}
-                    className="text-xs font-readex text-[#0F382C] hover:underline font-semibold flex items-center gap-1"
-                  >
-                    <span>{t('treatise_details')}</span>
-                  </button>
+                <div className="p-4 sm:p-5 bg-[#FAF6EE] border-t border-[#E8DCC9] flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => handleOpenBook(book)}
+                      className="text-xs font-readex text-[#0F382C] hover:underline font-semibold flex items-center gap-1"
+                    >
+                      <span>{t('treatise_details')}</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={(e) => handleShareBook(book, e)}
+                      className="p-1.5 rounded-lg text-[#8C6D3B] hover:text-[#0F382C] hover:bg-white border border-transparent hover:border-[#E0D4C1] transition"
+                      title={t('share_book')}
+                      aria-label={t('share_book')}
+                    >
+                      {copiedBookId === book.id ? (
+                        <Check className="w-3.5 h-3.5 text-emerald-600" />
+                      ) : (
+                        <Share2 className="w-3.5 h-3.5" />
+                      )}
+                    </button>
+                  </div>
 
                   <div className="flex items-center gap-1.5">
                     {book.isPaid ? (
@@ -435,8 +489,14 @@ export const LibraryExplorer: React.FC<LibraryExplorerProps> = ({
 
       {/* Book Detailed Modal */}
       {activeBook && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm animate-fadeIn">
-          <div className="bg-[#FDFBF7] rounded-3xl max-w-2xl w-full border-2 border-[#C5A880] shadow-2xl overflow-hidden p-6 sm:p-8">
+        <div
+          onClick={handleCloseBook}
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm animate-fadeIn"
+        >
+          <div
+            onClick={e => e.stopPropagation()}
+            className="bg-[#FDFBF7] rounded-3xl max-w-2xl w-full border-2 border-[#C5A880] shadow-2xl overflow-hidden p-6 sm:p-8"
+          >
             <div className="flex items-start justify-between gap-4 mb-4">
               <div>
                 <div className="flex flex-wrap items-center gap-2">
@@ -467,8 +527,9 @@ export const LibraryExplorer: React.FC<LibraryExplorerProps> = ({
                 )}
               </div>
               <button
-                onClick={() => setActiveBook(null)}
-                className="w-8 h-8 rounded-full bg-[#F4EFE6] text-[#0F382C] hover:bg-[#C5A880]/30 flex items-center justify-center text-sm font-bold"
+                onClick={handleCloseBook}
+                aria-label={t('close_modal')}
+                className="w-8 h-8 rounded-full bg-[#F4EFE6] text-[#0F382C] hover:bg-[#C5A880]/30 flex items-center justify-center text-sm font-bold shrink-0"
               >
                 ✕
               </button>
@@ -495,56 +556,76 @@ export const LibraryExplorer: React.FC<LibraryExplorerProps> = ({
               </div>
             </div>
 
-            <div className="flex flex-wrap items-center justify-end gap-3 pt-4 border-t border-[#C5A880]/30 font-readex text-xs">
+            <div className="flex flex-wrap items-center justify-between gap-3 pt-4 border-t border-[#C5A880]/30 font-readex text-xs">
               <button
-                onClick={() => setActiveBook(null)}
-                className="px-4 py-2 rounded-xl text-[#1E1E1E] hover:bg-[#F4EFE6]"
+                type="button"
+                onClick={() => handleShareBook(activeBook)}
+                className="px-3.5 py-2 rounded-xl bg-white border border-[#C5A880]/50 text-[#0F382C] hover:bg-[#F4EFE6] flex items-center gap-1.5 font-semibold transition"
               >
-                {t('close_modal')}
+                {copiedBookId === activeBook.id ? (
+                  <>
+                    <Check className="w-3.5 h-3.5 text-emerald-600" />
+                    <span className="text-emerald-700">{t('link_copied')}</span>
+                  </>
+                ) : (
+                  <>
+                    <Share2 className="w-3.5 h-3.5 text-[#A58455]" />
+                    <span>{t('share_book')}</span>
+                  </>
+                )}
               </button>
-              {activeBook.isPaid ? (
-                <a
-                  href={generateWhatsAppOrderLink(activeBook)}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="px-5 py-2.5 rounded-xl bg-[#C5A880] text-[#0F382C] font-bold flex items-center gap-1.5 shadow hover:bg-[#DFC7A5]"
+
+              <div className="flex flex-wrap items-center justify-end gap-2.5">
+                <button
+                  onClick={handleCloseBook}
+                  className="px-4 py-2 rounded-xl text-[#1E1E1E] hover:bg-[#F4EFE6]"
                 >
-                  <ShoppingBag className="w-4 h-4" />
-                  <span>{t('order_via_whatsapp')}</span>
-                </a>
-              ) : (
-                <>
-                  {activeBook.hasPdf && (
-                    <a
-                      href={activeBook.downloadUrl || '#'}
-                      onClick={e => {
-                        if (!activeBook.downloadUrl || activeBook.downloadUrl === '#') {
-                          e.preventDefault();
-                          setPdfNotice(
-                            lang === 'ar'
-                              ? `سيتم إتاحة النسخة الرقمية لكتاب «${activeBook.title}» قريباً بإذن الله`
-                              : `The digital PDF edition for "${activeBook.title}" will be released shortly inshā'Allāh`
-                          );
-                          setActiveBook(null);
-                        }
-                      }}
-                      className="px-4 py-2.5 rounded-xl bg-[#0F382C] text-white flex items-center gap-1.5 shadow hover:bg-[#164E3D]"
-                    >
-                      <Download className="w-4 h-4 text-[#DFC7A5]" />
-                      <span>{t('download_pdf')}</span>
-                    </a>
-                  )}
+                  {t('close_modal')}
+                </button>
+                {activeBook.isPaid ? (
                   <a
-                    href={generateWhatsAppLink(activeBook)}
+                    href={generateWhatsAppOrderLink(activeBook)}
                     target="_blank"
                     rel="noreferrer"
-                    className="px-4 py-2.5 rounded-xl bg-[#F4EFE6] text-[#0F382C] border border-[#C5A880]/50 flex items-center gap-1.5 hover:bg-[#C5A880]/20"
+                    className="px-5 py-2.5 rounded-xl bg-[#C5A880] text-[#0F382C] font-bold flex items-center gap-1.5 shadow hover:bg-[#DFC7A5]"
                   >
-                    <MessageCircle className="w-4 h-4 text-emerald-700" />
-                    <span>{t('whatsapp_request')}</span>
+                    <ShoppingBag className="w-4 h-4" />
+                    <span>{t('order_via_whatsapp')}</span>
                   </a>
-                </>
-              )}
+                ) : (
+                  <>
+                    {activeBook.hasPdf && (
+                      <a
+                        href={activeBook.downloadUrl || '#'}
+                        onClick={e => {
+                          if (!activeBook.downloadUrl || activeBook.downloadUrl === '#') {
+                            e.preventDefault();
+                            setPdfNotice(
+                              lang === 'ar'
+                                ? `سيتم إتاحة النسخة الرقمية لكتاب «${activeBook.title}» قريباً بإذن الله`
+                                : `The digital PDF edition for "${activeBook.title}" will be released shortly inshā'Allāh`
+                            );
+                            handleCloseBook();
+                          }
+                        }}
+                        className="px-4 py-2.5 rounded-xl bg-[#0F382C] text-white flex items-center gap-1.5 shadow hover:bg-[#164E3D]"
+                      >
+                        <Download className="w-4 h-4 text-[#DFC7A5]" />
+                        <span>{t('download_pdf')}</span>
+                      </a>
+                    )}
+                    <a
+                      href={generateWhatsAppLink(activeBook)}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="px-4 py-2.5 rounded-xl bg-[#F4EFE6] text-[#0F382C] border border-[#C5A880]/50 flex items-center gap-1.5 hover:bg-[#C5A880]/20"
+                    >
+                      <MessageCircle className="w-4 h-4 text-emerald-700" />
+                      <span>{t('whatsapp_request')}</span>
+                    </a>
+                  </>
+                )}
+              </div>
             </div>
           </div>
         </div>

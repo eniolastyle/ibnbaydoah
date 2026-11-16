@@ -2,6 +2,7 @@ import 'dotenv/config';
 import express from 'express';
 import http from 'http';
 import crypto from 'crypto';
+import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { dataStore, type AdminAuthData } from './src/db/store.ts';
@@ -833,6 +834,152 @@ app.get('/api/health', (_req, res) => {
   });
 });
 
+const PUBLIC_APP_URL = (process.env.APP_URL || 'https://ibnbaydoh.com.ng').replace(/\/+$/, '');
+
+function escapeHtmlAttr(value: string): string {
+  return String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
+function escapeXml(value: string): string {
+  return escapeHtmlAttr(value).replace(/'/g, '&apos;');
+}
+
+async function resolveRouteMeta(reqPath: string) {
+  const cleanPath = (reqPath || '/').split('?')[0].replace(/\/+$/, '') || '/';
+  const segments = cleanPath.split('/').filter(Boolean).map(s => {
+    try {
+      return decodeURIComponent(s);
+    } catch {
+      return s;
+    }
+  });
+
+  const baseTitle = 'منصة أبي سعيد ابن بيضاء العلمية | Ibn Baydoah Platform';
+  const defaultDesc =
+    'المنصة العلمية الرسمية لطالب العلم والباحث في العلوم الشرعية واللغوية أبي سعيد مسعود بن محمود ابن بيضاء. تضم مؤلفاته وشروحاته الصوتية ومنظوماته وخواطره.';
+
+  const sectionMeta: Record<string, { title: string; description: string }> = {
+    library: {
+      title: `المكتبة والمؤلفات العلمية | ${baseTitle}`,
+      description: 'خزانة مؤلفات وتحقيقات الشيخ أبي سعيد ابن بيضاء في العقيدة والفقه والحديث واللغة.',
+    },
+    audios: {
+      title: `الشروح الصوتية والمجالس العلمية | ${baseTitle}`,
+      description: 'السلاسل الصوتية وشروح المتون العلمية المسجلة في مركز الإمام سيبويه والأكاديمية الافتراضية.',
+    },
+    poetry: {
+      title: `الديوان والمنظومات التعليمية | ${baseTitle}`,
+      description: 'منظومات الشيخ أبي سعيد ابن بيضاء في تعظيم العلم والفقه والحديث والرقائق.',
+    },
+    articles: {
+      title: `خواطر ابن بيضاء والمقالات المحررة | ${baseTitle}`,
+      description: 'سلسلة خواطر ابن بيضاء والبحوث الأكاديمية والمقالات العقدية واللغوية.',
+    },
+    schedule: {
+      title: `الحلقات والجدول الأسبوعي | ${baseTitle}`,
+      description: 'مواعيد الحلقات الحضورية بمركز الإمام سيبويه بإلورن والأكاديمية العلمية الافتراضية.',
+    },
+    contact: {
+      title: `صندوق الأسئلة والاستفتاءات | ${baseTitle}`,
+      description: 'اطرح سؤالك العلمي أو الشرعي على الشيخ أبي سعيد ابن بيضاء.',
+    },
+  };
+
+  let title = baseTitle;
+  let description = defaultDesc;
+  const tab = segments[0]?.toLowerCase();
+  const itemId = segments[1];
+
+  if (tab && sectionMeta[tab]) {
+    title = sectionMeta[tab].title;
+    description = sectionMeta[tab].description;
+  }
+
+  try {
+    if (tab === 'library' && itemId) {
+      const books = await dataStore.getBooks();
+      const book = books.find(b => b.id === itemId);
+      if (book) {
+        title = `${book.title} | المكتبة العلمية | ${baseTitle}`;
+        description = book.description || sectionMeta.library.description;
+      }
+    } else if (tab === 'audios' && itemId) {
+      const audios = await dataStore.getAudios();
+      const course = audios.find(a => a.id === itemId);
+      if (course) {
+        title = `${course.title} | الشروح الصوتية | ${baseTitle}`;
+        description = course.description || sectionMeta.audios.description;
+      }
+    } else if (tab === 'poetry' && itemId) {
+      const poems = await dataStore.getPoems();
+      const poem = poems.find(p => p.id === itemId);
+      if (poem) {
+        title = `${poem.title} | الديوان الشعري | ${baseTitle}`;
+        description = poem.summary || sectionMeta.poetry.description;
+      }
+    } else if (tab === 'articles' && itemId) {
+      const articles = await dataStore.getArticles();
+      const art = articles.find(a => a.id === itemId);
+      if (art) {
+        title = `${art.title} | خواطر ومقالات | ${baseTitle}`;
+        description = art.summary || art.content.slice(0, 160) || sectionMeta.articles.description;
+      }
+    }
+  } catch {
+    // Fallback cleanly to section metadata
+  }
+
+  return {
+    title,
+    description: description.slice(0, 200),
+    url: `${PUBLIC_APP_URL}${cleanPath === '/' ? '/' : cleanPath}`,
+  };
+}
+
+app.get('/robots.txt', (_req, res) => {
+  res.type('text/plain').send(
+    `User-agent: *\nAllow: /\nDisallow: /admin\nDisallow: /api/\n\nSitemap: ${PUBLIC_APP_URL}/sitemap.xml\n`
+  );
+});
+
+app.get('/sitemap.xml', async (_req, res) => {
+  try {
+    const [books, audios, poems, articles] = await Promise.all([
+      dataStore.getBooks(),
+      dataStore.getAudios(),
+      dataStore.getPoems(),
+      dataStore.getArticles(),
+    ]);
+    const staticPaths = ['/', '/library', '/audios', '/poetry', '/articles', '/schedule', '/contact'];
+    const dynamicPaths = [
+      ...books.map(b => `/library/${encodeURIComponent(b.id)}`),
+      ...audios.map(a => `/audios/${encodeURIComponent(a.id)}`),
+      ...poems.map(p => `/poetry/${encodeURIComponent(p.id)}`),
+      ...articles.map(a => `/articles/${encodeURIComponent(a.id)}`),
+    ];
+    const urls = [...staticPaths, ...dynamicPaths]
+      .map(
+        p =>
+          `  <url>\n    <loc>${escapeXml(`${PUBLIC_APP_URL}${p}`)}</loc>\n  </url>`
+      )
+      .join('\n');
+    res.type('application/xml').send(
+      `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${urls}\n</urlset>\n`
+    );
+  } catch {
+    res.status(500).type('text/plain').send('Failed generating sitemap');
+  }
+});
+
+// Ensure unknown /api/* requests always return JSON 404 instead of SPA HTML
+app.all('/api/*', (_req, res) => {
+  res.status(404).json({ success: false, message: 'API route not found' });
+});
+
 // Start server with Vite middleware in dev or static dist in production
 async function startServer() {
   await dataStore.init();
@@ -852,9 +999,53 @@ async function startServer() {
     app.use(vite.middlewares);
   } else {
     const distPath = path.resolve(__dirname, 'dist');
-    app.use(express.static(distPath));
-    app.get('*', (_req, res) => {
-      res.sendFile(path.resolve(distPath, 'index.html'));
+    const indexHtmlPath = path.resolve(distPath, 'index.html');
+    const cachedTemplate = fs.existsSync(indexHtmlPath)
+      ? fs.readFileSync(indexHtmlPath, 'utf-8')
+      : '';
+
+    app.use(express.static(distPath, { index: false }));
+    app.get('*', async (req, res) => {
+      if (!cachedTemplate) {
+        return res.sendFile(indexHtmlPath);
+      }
+      const meta = await resolveRouteMeta(req.path);
+      const safeTitle = escapeHtmlAttr(meta.title);
+      const safeDesc = escapeHtmlAttr(meta.description);
+      const safeUrl = escapeHtmlAttr(meta.url);
+
+      const html = cachedTemplate
+        .replace(/<title>[\s\S]*?<\/title>/, `<title>${safeTitle}</title>`)
+        .replace(
+          /<meta name="description" content="[^"]*"\s*\/?>/,
+          `<meta name="description" content="${safeDesc}" />`
+        )
+        .replace(
+          /<link rel="canonical" href="[^"]*"\s*\/?>/,
+          `<link rel="canonical" href="${safeUrl}" />`
+        )
+        .replace(
+          /<meta property="og:title" content="[^"]*"\s*\/?>/,
+          `<meta property="og:title" content="${safeTitle}" />`
+        )
+        .replace(
+          /<meta property="og:description" content="[^"]*"\s*\/?>/,
+          `<meta property="og:description" content="${safeDesc}" />`
+        )
+        .replace(
+          /<meta property="og:url" content="[^"]*"\s*\/?>/,
+          `<meta property="og:url" content="${safeUrl}" />`
+        )
+        .replace(
+          /<meta name="twitter:title" content="[^"]*"\s*\/?>/,
+          `<meta name="twitter:title" content="${safeTitle}" />`
+        )
+        .replace(
+          /<meta name="twitter:description" content="[^"]*"\s*\/?>/,
+          `<meta name="twitter:description" content="${safeDesc}" />`
+        );
+
+      res.type('html').send(html);
     });
   }
 

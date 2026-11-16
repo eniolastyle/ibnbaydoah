@@ -1,6 +1,6 @@
-import React from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { IslamicSeal } from './IslamicSeal';
-import { Profile } from '../types';
+import { Profile, Poem } from '../types';
 import { useLanguage } from '../context/LanguageContext';
 import {
   BookOpen,
@@ -12,27 +12,84 @@ import {
   Clock,
   ArrowRight,
   ArrowLeft,
-  Sparkles,
   MessageSquare,
-  BookmarkCheck,
-  Compass
+  Compass,
+  ChevronLeft,
+  ChevronRight
 } from 'lucide-react';
 
 interface HeroProps {
   profile: Profile;
   onNavigate: (tab: string) => void;
+  onOpenPoem?: (poemId: string) => void;
+  poems?: Poem[];
+  isLoadingPoems?: boolean;
   stats?: {
     booksCount: number;
     audiosCount: number;
     poemsCount: number;
     articlesCount: number;
+    totalPoemsVerses?: number;
+    totalKhawatir?: number;
   };
 }
 
-export const Hero: React.FC<HeroProps> = ({ profile, onNavigate, stats }) => {
-  const { lang, t } = useLanguage();
+export const Hero: React.FC<HeroProps> = ({
+  profile,
+  onNavigate,
+  onOpenPoem,
+  poems = [],
+  isLoadingPoems = false,
+  stats
+}) => {
+  const { lang, dir, t, translateMeter, translateCategory } = useLanguage();
 
   const ArrowIcon = lang === 'ar' ? ArrowLeft : ArrowRight;
+
+  // Prefer poems that actually contain verses; fall back to all platform poems
+  const spotlightPoems = useMemo(() => {
+    const withVerses = poems.filter(p => p.verses && p.verses.length > 0);
+    return withVerses.length > 0 ? withVerses : poems;
+  }, [poems]);
+
+  // Default to the flagship poem (largest totalVerses or poem-2 if available) once poems load
+  const defaultSpotlightIndex = useMemo(() => {
+    if (spotlightPoems.length === 0) return 0;
+    const flagshipIdx = spotlightPoems.findIndex(p => p.id === 'poem-2');
+    if (flagshipIdx !== -1) return flagshipIdx;
+    let maxIdx = 0;
+    for (let i = 1; i < spotlightPoems.length; i++) {
+      if ((spotlightPoems[i].totalVerses || 0) > (spotlightPoems[maxIdx].totalVerses || 0)) {
+        maxIdx = i;
+      }
+    }
+    return maxIdx;
+  }, [spotlightPoems]);
+
+  const [spotlightIndex, setSpotlightIndex] = useState<number>(0);
+  const [hasUserCycled, setHasUserCycled] = useState<boolean>(false);
+
+  useEffect(() => {
+    if (!hasUserCycled && spotlightPoems.length > 0) {
+      setSpotlightIndex(defaultSpotlightIndex);
+    }
+  }, [defaultSpotlightIndex, hasUserCycled, spotlightPoems.length]);
+
+  const safeSpotlightIndex =
+    spotlightPoems.length > 0 ? ((spotlightIndex % spotlightPoems.length) + spotlightPoems.length) % spotlightPoems.length : 0;
+  const spotlightPoem = spotlightPoems[safeSpotlightIndex] || null;
+
+  const handlePrevPoem = () => {
+    if (spotlightPoems.length <= 1) return;
+    setHasUserCycled(true);
+    setSpotlightIndex(prev => (prev - 1 + spotlightPoems.length) % spotlightPoems.length);
+  };
+
+  const handleNextPoem = () => {
+    if (spotlightPoems.length <= 1) return;
+    setHasUserCycled(true);
+    setSpotlightIndex(prev => (prev + 1) % spotlightPoems.length);
+  };
 
   const displayedName =
     lang === 'ar'
@@ -63,6 +120,9 @@ export const Hero: React.FC<HeroProps> = ({ profile, onNavigate, stats }) => {
     lang === 'ar'
       ? profile.teaching_schedule
       : (profile.teachingScheduleEnglish || "Friday, Saturday, & Sunday (After 'Asr to before Maghrib)");
+
+  const PrevIcon = dir === 'rtl' ? ChevronRight : ChevronLeft;
+  const NextIcon = dir === 'rtl' ? ChevronLeft : ChevronRight;
 
   return (
     <section className="relative overflow-hidden bg-gradient-to-b from-[#FDFBF7] via-[#F8F3EA] to-[#FDFBF7] pt-8 sm:pt-14 pb-20 sm:pb-28 border-b border-[#E8DCC9]">
@@ -165,7 +225,7 @@ export const Hero: React.FC<HeroProps> = ({ profile, onNavigate, stats }) => {
 
           {/* Curated Showcase Spotlight Column (5 cols) */}
           <div className="lg:col-span-5 space-y-6">
-            {/* Feature Card 1: Pearl from the Scholar's Didactic Poetry */}
+            {/* Feature Card 1: Pearl from the Scholar's Didactic Poetry (Live from Platform) */}
             <div className="relative rounded-3xl bg-gradient-to-b from-white to-[#FAF6EE] border border-[#E0D3BE] p-6 sm:p-8 shadow-sm overflow-hidden">
               {/* Corner Ornamental Accents */}
               <div className="absolute top-3 left-3 text-[#C5A880]/40 font-amiri text-lg select-none">۞</div>
@@ -174,48 +234,129 @@ export const Hero: React.FC<HeroProps> = ({ profile, onNavigate, stats }) => {
               <div className="absolute bottom-3 right-3 text-[#C5A880]/40 font-amiri text-lg select-none">۞</div>
 
               <div className="relative z-10 space-y-4">
-                <div className="flex items-center justify-between border-b border-[#E8DCC9] pb-3">
+                <div className="flex items-center justify-between gap-2 border-b border-[#E8DCC9] pb-3">
                   <div className="flex items-center gap-2 text-xs font-readex font-bold text-[#0F382C]">
-                    <Feather className="w-4 h-4 text-[#A58455]" />
+                    <Feather className="w-4 h-4 text-[#A58455] shrink-0" />
                     <span>{lang === 'ar' ? 'دُرَّةٌ مِنْ مَنْظُومَاتِ الشَّيْخِ' : 'PEARL FROM HIS DIDACTIC POETRY'}</span>
                   </div>
-                  <span className="text-[11px] font-readex text-[#8C6D3B] font-semibold">
-                    {lang === 'ar' ? 'بحر البسيط' : 'Al-Basīṭ Meter'}
-                  </span>
+                  {spotlightPoem ? (
+                    <span className="text-[11px] font-readex text-[#8C6D3B] font-semibold shrink-0">
+                      {spotlightPoem.meter ? translateMeter(spotlightPoem.meter) : translateCategory(spotlightPoem.category)}
+                    </span>
+                  ) : null}
                 </div>
 
-                <div className="space-y-2">
-                  <h4 className="font-amiri font-bold text-lg text-[#0F382C]">
-                    {lang === 'ar' ? 'مِنْ مَنْظُومَةِ «تَعْظِيمِ الْعِلْمِ» (٦٠٠ بَيْتٍ)' : 'From the Poem on "Ta‘ẓīm al-‘Ilm" (600 Verses)'}
-                  </h4>
-                  <p className="text-xs text-[#7A6440] font-readex">
-                    {lang === 'ar' ? 'في آداب الطلب وسبل تحصيل العلوم وضبط الأصول:' : 'On the manners of seeking knowledge and master discipline:'}
-                  </p>
-                </div>
+                {isLoadingPoems && !spotlightPoem ? (
+                  <div className="space-y-3 py-4 animate-pulse">
+                    <div className="h-5 w-3/4 rounded bg-[#E8DCC9]/70" />
+                    <div className="h-3.5 w-full rounded bg-[#E8DCC9]/50" />
+                    <div className="h-24 rounded-2xl bg-[#0F382C]/15" />
+                  </div>
+                ) : spotlightPoem ? (
+                  <>
+                    <div className="space-y-1.5">
+                      <div className="flex items-baseline justify-between gap-2">
+                        <h4 className="font-amiri font-bold text-xl text-[#0F382C]">
+                          {spotlightPoem.title}
+                        </h4>
+                        {spotlightPoem.year && (
+                          <span className="text-[11px] font-readex text-[#8C6D3B] shrink-0">
+                            {spotlightPoem.year}
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-xs text-[#7A6440] font-readex leading-relaxed line-clamp-2">
+                        {spotlightPoem.summary || translateCategory(spotlightPoem.category)}
+                      </p>
+                    </div>
 
-                {/* Two-hemistich classical verses display */}
-                <div dir="rtl" className="bg-[#0F382C] text-[#FDFBF7] p-5 rounded-2xl shadow-inner space-y-3 font-amiri text-base sm:text-lg text-center leading-loose border border-[#C5A880]/40">
-                  <p className="border-b border-[#C5A880]/20 pb-2">
-                    «العِلْمُ يَرْفَعُ بَيْتًا لَا عِمَادَ لَهُ ... وَالجَهْلُ يَهْدِمُ بَيْتَ العِزِّ وَالشَّرَفِ»
-                  </p>
-                  <p className="text-[#DFC7A5]">
-                    «وَحِلْيَةُ الطَّالِبِ التَّعْظِيمُ لِلأَثَرِ ... مَعَ التَّقَى وَصَفَاءِ القَلْبِ فِي السَّحَرِ»
-                  </p>
-                </div>
+                    {/* Authentic Two-Hemistich Verses Preview from Platform Data */}
+                    {spotlightPoem.verses && spotlightPoem.verses.length > 0 ? (
+                      <div
+                        dir="rtl"
+                        className="bg-[#0F382C] text-[#FDFBF7] p-5 rounded-2xl shadow-inner space-y-3 font-amiri text-base sm:text-lg text-center leading-loose border border-[#C5A880]/40"
+                      >
+                        {spotlightPoem.verses.slice(0, 2).map((verse, idx, arr) => (
+                          <p
+                            key={`${spotlightPoem.id}-verse-${verse.number ?? idx}`}
+                            className={
+                              idx === 0 && arr.length > 1
+                                ? 'border-b border-[#C5A880]/20 pb-2.5'
+                                : idx > 0
+                                ? 'text-[#DFC7A5]'
+                                : ''
+                            }
+                          >
+                            {verse.sadr} <span className="text-[#C5A880] mx-1.5">۞</span> {verse.ajuz}
+                          </p>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="bg-[#0F382C] text-[#DFC7A5] p-5 rounded-2xl shadow-inner text-center font-readex text-xs border border-[#C5A880]/40">
+                        {lang === 'ar'
+                          ? 'الأبيات النصية متاحة للمطالعة داخل صفحة الديوان'
+                          : 'Full verses are available to read inside the Poetry Diwan'}
+                      </div>
+                    )}
 
-                <div className="flex items-center justify-between pt-1">
-                  <button
-                    onClick={() => onNavigate('poetry')}
-                    className="text-xs font-readex font-bold text-[#0F382C] hover:text-[#164E3D] flex items-center gap-1.5 transition"
-                  >
-                    <span>{lang === 'ar' ? 'قراءة المنظومة كاملة' : 'Read Full Poem in Diwan'}</span>
-                    <ArrowIcon className="w-3.5 h-3.5" />
-                  </button>
+                    <div className="flex items-center justify-between gap-2 pt-1">
+                      <button
+                        onClick={() =>
+                          onOpenPoem ? onOpenPoem(spotlightPoem.id) : onNavigate('poetry')
+                        }
+                        className="text-xs font-readex font-bold text-[#0F382C] hover:text-[#164E3D] flex items-center gap-1.5 transition"
+                      >
+                        <span>{lang === 'ar' ? 'قراءة المنظومة كاملة' : 'Read Full Poem in Diwan'}</span>
+                        <ArrowIcon className="w-3.5 h-3.5" />
+                      </button>
 
-                  <span className="text-[11px] text-[#8C6D3B] font-readex">
-                    {lang === 'ar' ? '٦٠٠ بيت محرر' : '600 edited verses'}
-                  </span>
-                </div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-[11px] text-[#8C6D3B] font-readex">
+                          {spotlightPoem.totalVerses || spotlightPoem.verses?.length || 0} {t('verses_count')}
+                        </span>
+
+                        {spotlightPoems.length > 1 && (
+                          <div className="flex items-center gap-1 border-s border-[#E8DCC9] ps-2">
+                            <button
+                              type="button"
+                              onClick={handlePrevPoem}
+                              aria-label={lang === 'ar' ? 'المنظومة السابقة' : 'Previous poem'}
+                              className="w-6 h-6 rounded-lg bg-white border border-[#E0D3BE] hover:bg-[#F4EFE6] text-[#0F382C] flex items-center justify-center transition"
+                            >
+                              <PrevIcon className="w-3.5 h-3.5" />
+                            </button>
+                            <span className="text-[10px] font-readex text-[#8C6D3B] min-w-[26px] text-center">
+                              {safeSpotlightIndex + 1}/{spotlightPoems.length}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={handleNextPoem}
+                              aria-label={lang === 'ar' ? 'المنظومة التالية' : 'Next poem'}
+                              className="w-6 h-6 rounded-lg bg-white border border-[#E0D3BE] hover:bg-[#F4EFE6] text-[#0F382C] flex items-center justify-center transition"
+                            >
+                              <NextIcon className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </>
+                ) : (
+                  <div className="py-6 text-center space-y-3">
+                    <p className="text-xs font-readex text-[#7A6440]">
+                      {lang === 'ar'
+                        ? 'لا توجد منظومات منشورة في الديوان حالياً.'
+                        : 'No didactic poems are currently published in the Diwan.'}
+                    </p>
+                    <button
+                      onClick={() => onNavigate('poetry')}
+                      className="text-xs font-readex font-bold text-[#0F382C] hover:text-[#164E3D] inline-flex items-center gap-1.5 transition"
+                    >
+                      <span>{t('read_poetry')}</span>
+                      <ArrowIcon className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                )}
               </div>
             </div>
 

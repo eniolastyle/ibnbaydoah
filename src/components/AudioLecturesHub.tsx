@@ -3,6 +3,7 @@ import { AudioCourse, AudienceLevelId } from '../types';
 import { useAudio, ActiveTrack } from '../context/AudioContext';
 import { useLanguage } from '../context/LanguageContext';
 import { Pagination } from './Pagination';
+import { getShareableUrl, copyShareUrl } from '../utils/routing';
 import {
   Headphones,
   Play,
@@ -16,12 +17,16 @@ import {
   ChevronDown,
   ChevronUp,
   FileText,
-  ExternalLink
+  ExternalLink,
+  Share2,
+  Check
 } from 'lucide-react';
 
 interface AudioLecturesHubProps {
   audios: AudioCourse[];
   categories: string[];
+  initialCourseId?: string | null;
+  onSelectCourse?: (courseId: string | null) => void;
 }
 
 const AUDIOS_PAGE_SIZE = 5;
@@ -29,6 +34,8 @@ const AUDIOS_PAGE_SIZE = 5;
 export const AudioLecturesHub: React.FC<AudioLecturesHubProps> = ({
   audios,
   categories,
+  initialCourseId = null,
+  onSelectCourse
 }) => {
   const { lang, t, translateCategory, translateLevel, translateAudioStatus } = useLanguage();
   const { playQueue, playTrack, togglePlay, currentTrack, isPlaying } = useAudio();
@@ -37,12 +44,38 @@ export const AudioLecturesHub: React.FC<AudioLecturesHubProps> = ({
   const [selectedLevel, setSelectedLevel] = useState<string>('all');
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState('');
-  const [expandedCourseId, setExpandedCourseId] = useState<string | null>(null);
+  const [expandedCourseId, setExpandedCourseId] = useState<string | null>(initialCourseId);
+  const [copiedCourseId, setCopiedCourseId] = useState<string | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
 
   useEffect(() => {
     setCurrentPage(1);
   }, [selectedCategory, selectedLevel, statusFilter, searchQuery, audios.length]);
+
+  useEffect(() => {
+    if (!initialCourseId) {
+      setExpandedCourseId(null);
+      return;
+    }
+    const idxInAll = audios.findIndex(a => a.id === initialCourseId);
+    if (idxInAll === -1) return;
+
+    // Ensure deep-linked course is visible by clearing active filters if needed and jumping to its page
+    setSelectedCategory('all');
+    setSelectedLevel('all');
+    setStatusFilter('all');
+    setSearchQuery('');
+    setExpandedCourseId(initialCourseId);
+    const targetPage = Math.floor(idxInAll / AUDIOS_PAGE_SIZE) + 1;
+    setCurrentPage(targetPage);
+
+    setTimeout(() => {
+      const el = document.getElementById(`audio-course-${initialCourseId}`);
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+    }, 120);
+  }, [initialCourseId, audios]);
 
   const filteredAudios = audios.filter(course => {
     const matchesCategory =
@@ -129,7 +162,18 @@ export const AudioLecturesHub: React.FC<AudioLecturesHubProps> = ({
   };
 
   const toggleCourseExpand = (id: string) => {
-    setExpandedCourseId(prev => (prev === id ? null : id));
+    const next = expandedCourseId === id ? null : id;
+    setExpandedCourseId(next);
+    onSelectCourse?.(next);
+  };
+
+  const handleShareCourse = async (course: AudioCourse) => {
+    const url = getShareableUrl({ tab: 'audios', itemId: course.id });
+    const ok = await copyShareUrl(url);
+    if (ok) {
+      setCopiedCourseId(course.id);
+      setTimeout(() => setCopiedCourseId(prev => (prev === course.id ? null : prev)), 2200);
+    }
   };
 
   return (
@@ -267,8 +311,11 @@ export const AudioLecturesHub: React.FC<AudioLecturesHubProps> = ({
 
             return (
               <div
+                id={`audio-course-${course.id}`}
                 key={course.id}
-                className="bg-white rounded-3xl border border-[#E8DCC9] shadow-[0_2px_12px_-2px_rgba(15,56,44,0.04)] hover:shadow-lg hover:border-[#0F382C]/40 transition-all duration-300 overflow-hidden"
+                className={`bg-white rounded-3xl border shadow-[0_2px_12px_-2px_rgba(15,56,44,0.04)] hover:shadow-lg hover:border-[#0F382C]/40 transition-all duration-300 overflow-hidden ${
+                  initialCourseId === course.id ? 'border-[#0F382C] ring-2 ring-[#C5A880]/60' : 'border-[#E8DCC9]'
+                }`}
               >
                 {/* Course Header */}
                 <div className="p-6 sm:p-8 flex flex-col md:flex-row md:items-center justify-between gap-6">
@@ -410,6 +457,26 @@ export const AudioLecturesHub: React.FC<AudioLecturesHubProps> = ({
                         )}
                       </button>
                     )}
+
+                    {/* Share Course Link */}
+                    <button
+                      type="button"
+                      onClick={() => handleShareCourse(course)}
+                      className="p-2.5 rounded-xl border border-[#C5A880]/40 text-[#8C6D3B] hover:text-[#0F382C] hover:bg-[#F4EFE6] transition text-xs font-readex flex items-center gap-1.5 font-semibold"
+                      title={t('share_course')}
+                    >
+                      {copiedCourseId === course.id ? (
+                        <>
+                          <Check className="w-3.5 h-3.5 text-emerald-600" />
+                          <span className="text-emerald-700">{t('link_copied')}</span>
+                        </>
+                      ) : (
+                        <>
+                          <Share2 className="w-3.5 h-3.5" />
+                          <span className="hidden sm:inline">{t('share')}</span>
+                        </>
+                      )}
+                    </button>
                   </div>
                 </div>
 
